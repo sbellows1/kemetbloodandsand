@@ -1,0 +1,4 @@
+.vscode/
+*.pdf
+prototype-preview.png
+node_modules/

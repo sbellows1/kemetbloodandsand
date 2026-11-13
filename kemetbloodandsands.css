@@ -1,0 +1,71 @@
+#kemet-root { color:#3e322b; font:15px/1.45 system-ui,sans-serif; max-width:1460px; margin:16px auto; padding:0 14px 32px; }
+#kemet-root * { box-sizing:border-box; }
+#kemet-root h1,#kemet-root h2,#kemet-root h3 { font-family:Georgia,serif; margin:0 0 10px; }
+#kemet-root h1 { font-size:32px; color:#fff4df; text-shadow:0 2px 8px #1d140f; }
+#kemet-root h2 { font-size:22px; border-bottom:2px solid #c9aa70; padding-bottom:5px; }
+#kemet-root h3 { font-size:17px; }
+#kemet-root p { margin:4px 0 11px; }
+.kemet-title { display:flex; justify-content:space-between; align-items:center; gap:12px; min-height:158px; padding:18px 22px; background:linear-gradient(90deg,#29180fe8,#29180f88 54%,#29180f22),url('img/prototype-hero.jpg') center 55%/cover; border:2px solid #b7975d; border-radius:12px; color:#fff4df; }
+.kemet-title small { letter-spacing:.2em; color:#f6d39a; }
+.kemet-title p { color:#fff2d9; text-shadow:0 1px 5px #24150e; }
+#kemet-phase { display:flex; flex-direction:column; background:linear-gradient(#302018ad,#302018e0),url('img/prototype-poster.jpg') center 40%/cover; color:#fff4da; padding:12px 18px; border:1px solid #d6b575; border-radius:8px; white-space:nowrap; text-shadow:0 1px 3px #21140e; }
+#kemet-players { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:8px; margin:12px 0; }
+.kemet-player { border-left:8px solid var(--player); background:#fff8ec; padding:6px; display:grid; grid-template-columns:88px minmax(0,1fr); gap:8px; min-height:86px; box-shadow:0 1px 3px #967e6338; }
+.kemet-player-art { display:block; width:88px; min-height:74px; background-image:url('img/prototype-players.jpg'); background-size:500% 100%; background-position:0 0; border-radius:3px; }
+.kemet-player-art.art-1 { background-position:25% 0; }
+.kemet-player-art.art-2 { background-position:50% 0; }
+.kemet-player-art.art-3 { background-position:75% 0; }
+.kemet-player-art.art-4 { background-position:100% 0; }
+.kemet-player-copy { display:flex; flex-direction:column; min-width:0; }
+.kemet-player small { color:#725f51; }
+.kemet-layout { display:grid; grid-template-columns:minmax(0,2fr) minmax(290px,1fr); gap:16px; align-items:start; }
+.kemet-layout>section,.kemet-layout>aside>section { background:#fff9ed; border:1px solid #cdb893; border-radius:10px; padding:15px; margin-bottom:12px; }
+.kemet-hint { color:#6e6155; font-size:13px; }
+#kemet-map-scroll { overflow:auto; border:2px solid #9b7650; border-radius:8px; background:#d3b583; }
+#kemet-map { position:relative; width:100%; min-width:580px; aspect-ratio:1381 / 1700; background:url('img/prototype-board.jpg') center/100% 100% no-repeat; }
+.kemet-city-site { position:absolute; z-index:1; transform:translate(-50%,-50%); padding:2px 5px; border-radius:4px; background:#4e2f1de0; color:#fff9e9; border:1px solid #dfc085; font:bold 11px Georgia,serif; pointer-events:none; }
+.kemet-city-site.storm { background:#34343bdc; }
+.kemet-city-site.outside { background:#6c6b6bdc; }
+.kemet-inactive-district { position:absolute; z-index:1; transform:translate(-50%,-50%); min-width:30px; height:28px; border:2px solid #777; border-radius:50%; background:#4c4c51dc; color:white; display:grid; place-items:center; font:bold 10px Georgia,serif; pointer-events:none; }
+.kemet-map-pin { position:absolute; z-index:2; transform:translate(-50%,-50%); width:31px; height:31px; border:3px solid var(--owner); border-radius:50%; background:#fff8dbed; color:#402b1b; box-shadow:0 1px 6px #1d120fa3; display:grid; place-items:center; cursor:pointer; font:bold 11px Georgia,serif; padding:0; }
+.kemet-map-pin span { line-height:1; white-space:nowrap; }
+.kemet-map-pin.temple { border-radius:7px; background:#e4f0d9f2; color:#335336; }
+.kemet-map-pin.sanctuary { border-radius:7px; background:#e9e2f2f2; color:#543766; }
+.kemet-map-pin.desert { background:#f6e7c4e8; }
+.kemet-map-pin.route { box-shadow:0 0 0 3px #f7e360,0 1px 6px #1d120fa3; }
+.kemet-map-pin.selected,.kemet-map-pin:hover,.kemet-map-pin:focus-visible { z-index:4; outline:3px solid #fff; box-shadow:0 0 0 6px #b84029,0 2px 8px #1d120fa3; }
+.kemet-map-pin b { position:absolute; right:-10px; bottom:-7px; min-width:16px; height:16px; padding:1px 3px; border-radius:9px; background:var(--owner); color:white; font:700 10px/13px system-ui,sans-serif; }
+.kemet-map-pin i { position:absolute; left:-10px; top:-8px; width:16px; height:16px; border-radius:2px; background:#e24c3a; color:white; font:700 10px/16px system-ui,sans-serif; }
+.kemet-map-pin i.sapphire { background:#3979b2; }
+.kemet-map-pin i.diamond { background:#b39735; }
+.kemet-map-pin i.onyx { background:#33333d; }
+#kemet-map-detail { min-height:72px; display:flex; flex-direction:column; gap:3px; padding:9px 11px; background:#f4e7cb; border:1px solid #c9ad7e; border-radius:7px; margin-top:9px; font-size:13px; }
+#kemet-map-detail strong { font:700 16px Georgia,serif; }
+#kemet-map-detail small { color:#625344; }
+.kemet-action-form { border-top:1px solid #d8c6a8; padding:12px 0 10px; }
+.kemet-field { display:flex; flex-direction:column; gap:3px; margin:7px 0; font-size:13px; }
+.kemet-field select,.kemet-field input[type=number] { width:100%; padding:7px; border:1px solid #aa987e; border-radius:5px; background:white; font:inherit; }
+.kemet-field input[type=checkbox] { align-self:flex-start; width:18px; height:18px; }
+#kemet-root button[data-kemet-action] { border:0; border-radius:6px; background:#8d392b; color:white; padding:8px 12px; margin:5px 5px 0 0; cursor:pointer; font-weight:700; }
+#kemet-root button[data-kemet-action]:hover { background:#63291f; }
+#kemet-root button[data-kemet-action].secondary { background:#6b655a; }
+.kemet-used { display:flex; flex-wrap:wrap; gap:4px; }
+.kemet-used span { background:#e8d7b7; border-radius:15px; padding:2px 7px; font-size:12px; }
+.kemet-tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:6px; max-height:350px; overflow:auto; }
+.kemet-tile { padding:0; border-left:6px solid #a14435; background:#f8e8dd; display:flex; flex-direction:column; font-size:12px; overflow:hidden; }
+.kemet-tile-art { display:block; height:55px; background-image:url('img/prototype-power-art.jpg'); background-size:400% auto; background-position:0 top; }
+.kemet-tile-art.sapphire { background-position:33.333% top; }
+.kemet-tile-art.diamond { background-position:66.667% top; }
+.kemet-tile-art.onyx { background-position:100% top; }
+.kemet-tile-copy { display:flex; flex-direction:column; padding:6px 8px; }
+.kemet-tile.sapphire { border-color:#4779a1; background:#e7f0f7; }
+.kemet-tile.diamond { border-color:#d2ad45; background:#f9f2dc; }
+.kemet-tile.onyx { border-color:#3f414b; background:#e6e6eb; }
+#kemet-log ol { max-height:220px; overflow:auto; margin:0; padding-left:23px; }
+#kemet-log li { margin-bottom:4px; }
+@media(max-width:850px) { .kemet-layout { grid-template-columns:1fr; } }
+@media(max-width:520px) { .kemet-title { flex-wrap:wrap; } }
+
+
+
+
