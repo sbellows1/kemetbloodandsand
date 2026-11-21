@@ -12,7 +12,8 @@ export class Game {
         this.phase = '';
         this.selectedZone = '';
         this.moveSourcePicked = false;
-        for (const name of ['PlayerTurn', 'BattleChoice', 'BattleAftermath', 'NightChoice']) {
+        this.retreatOptions = [];
+        for (const name of ['PlayerTurn', 'BattleChoice', 'BattleAftermath', 'NightChoice', 'Destiny']) {
             this.bga.states.register(name, new KemetState(this, name));
         }
     }
@@ -38,7 +39,9 @@ export class Game {
         this.active = active;
         if (args.kemet) this.state = args.kemet;
         for (const key of ['slots', 'tiles', 'battleCards', 'diCards']) if (args[key]) this.defs[key] = args[key];
+        this.retreatOptions = args.retreatOptions || [];
         const titles = {
+            Destiny: active ? _('Choose your turn order space') : _('Players are choosing turn order'),
             PlayerTurn: active ? _('Choose one action') : _('A god is taking an action'),
             BattleChoice: active ? _('Choose two battle cards secretly') : _('War council is in progress'),
             BattleAftermath: active ? _('Choose your battle aftermath') : _('Battle aftermath is in progress'),
@@ -77,7 +80,7 @@ export class Game {
     render() {
         if (!this.state || !document.getElementById('kemet-root')) return;
         const s = this.state;
-        document.getElementById('kemet-phase').innerHTML = '<strong>Round ' + s.round + '</strong><span>' + (s.night ? 'Night' : 'Day') + ' · ' + (s.night ? s.night.index + 1 : Math.floor(s.turnIndex / s.order.length) + 1) + ' / 5</span>';
+        document.getElementById('kemet-phase').innerHTML = '<strong>Round ' + s.round + '</strong><span>' + (s.destiny ? 'Destiny' : (s.night ? 'Night' : 'Day') + ' · ' + (s.night ? s.night.index + 1 : Math.floor(s.turnIndex / s.order.length) + 1) + ' / 5') + '</span>';
         document.getElementById('kemet-players').innerHTML = s.order.map((id, index) => {
             const p = s.players[id];
             return '<div class="kemet-player" style="--player:' + this.playerColor(id) + '"><span class="kemet-player-art art-' + this.portraitIndex(id, index) + '" aria-hidden="true"></span><div class="kemet-player-copy"><strong>' + this.escape(this.name(id)) + '</strong><span>' + p.score + ' VP · ' + p.pp + ' PP · ' + p.veterans + ' veterans</span><small>' + this.escape(p.tiles.map(t => this.defs.tiles[t]?.name || t).join(', ')) + '</small></div></div>';
@@ -133,19 +136,33 @@ export class Game {
         if (this.phase === 'BattleChoice') {
             const hand = p.battleHand || [];
             const cards = hand.map(id => [String(id), this.defs.battleCards[id].name + ' · S' + this.defs.battleCards[id].strength + ' D' + this.defs.battleCards[id].damage + ' P' + this.defs.battleCards[id].pierce + ' B' + this.defs.battleCards[id].shield]);
-            const di = [['', 'No DI card'], ...(p.diHand || []).filter(c => this.defs.diCards[c]?.phase === 'battle').map(c => [c, this.defs.diCards[c].name + ' · ' + this.defs.diCards[c].text])];
-            return '<h2>War council</h2><p>Choose one card to play and a different card to discard facedown. The opponent will choose before both are revealed.</p>' +
-                this.field('Play', this.select('battle-play', cards)) + this.field('Discard', this.select('battle-discard', cards)) + this.field('Divine intervention', this.select('battle-di', di)) + this.button('Commit secret choice', 'battle');
+            const di = (p.diHand || []).filter(c => this.defs.diCards[c]?.phase === 'battle').map(c => this.field(this.defs.diCards[c].name + ' (' + this.defs.diCards[c].cost + ' PP) · ' + this.defs.diCards[c].text, '<input type="checkbox" class="battle-di" value="' + this.escape(c) + '">')).join('');
+            return '<h2>War council</h2><p>Choose one card to play and a different card to discard facedown. You may hide any number of battle DI cards under your played card.</p>' +
+                this.field('Play', this.select('battle-play', cards)) + this.field('Discard', this.select('battle-discard', cards)) + (di ? '<h3>Divine intervention</h3>' + di : '') + this.button('Commit secret choice', 'battle');
         }
         if (this.phase === 'BattleAftermath') {
             const b = s.battle;
             if (!b || !s.zones[b.zone]) return '<h2>Battle aftermath</h2><p>Resolving battle…</p>';
             const zone = s.zones[b.zone];
-            const retreat = zone.neighbors.map(k => [k, s.zones[k].name]);
-            return '<h2>Battle aftermath</h2><p>' + this.escape(this.name(b.winner)) + ' won in ' + this.escape(zone.name) + '. You are the ' + b.step + '.</p>' +
-                '<p>Strength: ' + Object.entries(b.totals).map(([id,t]) => this.escape(this.name(id)) + ' ' + t.strength).join(' · ') + '</p>' +
-                this.field('Retreat destination', this.select('retreat-to', retreat)) +
-                this.button('Stay', 'stay') + this.button('Recall troop', 'recall', true) + (b.step === 'loser' ? this.button('Retreat', 'retreat', true) : '');
+            let html = '<h2>Battle aftermath</h2><p>' + this.escape(this.name(b.winner)) + ' won in ' + this.escape(zone.name) + '.</p>' +
+                '<p>Strength: ' + Object.entries(b.totals || {}).map(([id,t]) => this.escape(this.name(id)) + ' ' + t.strength).join(' · ') + '</p>';
+            if (b.step === 'loser') {
+                const winnerStays = (zone.units[b.winner] || 0) > 0;
+                html += '<p>' + (winnerStays ? 'Recall your troop (gain PP equal to units − 1) or retreat; the winner chooses where you retreat.' : 'The winner has no troop left, so you must recall.') + '</p>' +
+                    this.button('Recall troop', 'recall') + (winnerStays ? this.button('Retreat', 'retreat-request', true) : '');
+            } else if (b.step === 'retreat') {
+                html += '<p>Choose an adjacent free zone for ' + this.escape(this.name(b.loser)) + '\'s retreating troop.</p>' +
+                    this.field('Retreat destination', this.select('retreat-to', this.retreatOptions.map(k => [k, s.zones[k].name]))) + this.button('Retreat them here', 'retreat');
+            } else {
+                html += '<p>Keep your troop in the zone or recall it.</p>' + this.button('Stay', 'stay') + this.button('Recall troop', 'recall', true);
+            }
+            return html;
+        }
+        if (this.phase === 'Destiny') {
+            const d = s.destiny;
+            if (!d) return '<h2>Destiny</h2><p>Resolving turn order…</p>';
+            return '<h2>Destiny</h2><p>Choose an empty turn order space. Space 1 plays first.</p>' +
+                d.positions.map((owner, i) => owner === null ? this.button('Space ' + (i + 1), 'destiny:' + i) : '<span class="kemet-used"><span>Space ' + (i + 1) + ': ' + this.escape(this.name(owner)) + '</span></span>').join(' ');
         }
         if (this.phase === 'NightChoice') {
             const homes = Object.entries(s.zones).filter(([,z]) => z.city === this.me).map(([k,z]) => [k,z.name]);
@@ -153,7 +170,7 @@ export class Game {
                 this.field('Sanctuary: sacrifice 2 units for 1 permanent VP', '<input id="night-offer" type="checkbox">') +
                 this.field('Delta: sacrifice 1 unit for 5 PP', '<input id="night-delta" type="checkbox">') +
                 this.field('Veterans for prayer points', '<input id="night-pray" type="number" min="0" max="20" value="0">') +
-                this.field('Veteran pairs for extra DI cards', '<input id="night-draw" type="number" min="0" max="10" value="0">') +
+                this.field('Veterans for extra DI cards (1 each)', '<input id="night-draw" type="number" min="0" max="20" value="0">') +
                 this.field('Veterans for units', '<input id="night-recruit" type="number" min="0" max="10" value="0">') +
                 this.field('Recruit into', this.select('night-district', homes)) + this.button('Confirm night', 'night');
         }
@@ -202,12 +219,17 @@ export class Game {
             recruit: ['actRecruit', {slot: this.value('recruit-slot'),zone: this.value('recruit-zone'),units: this.number('recruit-units')}],
             move: ['actMove', {slot: this.value('move-slot'),from: this.value('move-from'),to: this.value('move-to'),units: this.number('move-units'),teleport: this.checked('move-teleport'),via: this.value('move-via')}],
             day: ['actDayCard', {card: this.value('day-card'),zone: this.value('day-zone')}],
-            battle: ['actBattleChoice', {played: this.number('battle-play'),discarded: this.number('battle-discard'),di: this.value('battle-di')}],
+            battle: ['actBattleChoice', {played: this.number('battle-play'),discarded: this.number('battle-discard'),di: [...document.querySelectorAll('.battle-di:checked')].map(el => el.value).join(',')}],
             stay: ['actAftermath', {choice:'stay',retreatTo:''}],
             recall: ['actAftermath', {choice:'recall',retreatTo:''}],
+            'retreat-request': ['actAftermath', {choice:'retreat',retreatTo:''}],
             retreat: ['actAftermath', {choice:'retreat',retreatTo:this.value('retreat-to')}],
             night: ['actNightChoice', {offer:this.checked('night-offer'),delta:this.checked('night-delta'),pray:this.number('night-pray'),draw:this.number('night-draw'),recruit:this.number('night-recruit'),district:this.value('night-district')}]
         };
+        if (kind.startsWith('destiny:')) {
+            this.bga.actions.performAction('actDestiny', {position: Number(kind.slice(8))});
+            return;
+        }
         const [name, params] = actions[kind];
         this.bga.actions.performAction(name, params);
     }

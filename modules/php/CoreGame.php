@@ -63,7 +63,7 @@ class CoreGame extends \Bga\GameFramework\Table
             'round' => 1, 'order' => $order, 'turnIndex' => 0, 'colors' => $activeColors,
             'zones' => $zones, 'players' => $playerState,
             'market' => array_fill_keys(array_keys(PrototypeRules::TILES), true),
-            'diDeck' => $deck, 'diDiscard' => [], 'battle' => null, 'night' => null,
+            'diDeck' => $deck, 'diDiscard' => [], 'battle' => null, 'night' => null, 'destiny' => null,
             'log' => ['The gods gather their armies.'],
         ];
         foreach ($order as $id) {
@@ -112,8 +112,14 @@ class CoreGame extends \Bga\GameFramework\Table
             }
         }
         unset($player);
-        if ($view['battle'] !== null && $view['battle']['winner'] === null) {
-            $view['battle']['choices'] = array_fill_keys(array_keys($view['battle']['choices']), true);
+        if ($view['battle'] !== null) {
+            if ($view['battle']['winner'] === null) {
+                $view['battle']['choices'] = array_fill_keys(array_keys($view['battle']['choices']), true);
+            } else {
+                // The War Council discard stays facedown and is never revealed.
+                foreach ($view['battle']['choices'] as &$choice) unset($choice['discarded']);
+                unset($choice);
+            }
         }
         return $view;
     }
@@ -285,8 +291,9 @@ class CoreGame extends \Bga\GameFramework\Table
             $harbor = !empty($state['zones'][$previous]['harbor']) && ($nextZone['harbor'] === 'trade' || ($nextZone['harbor'] === 'military' && $nextZone['harborOwner'] === $id));
             if (!$land && !$harbor) throw new UserException('The route is not connected by land or a legal harbor.');
             if ($nextZone['kind'] === 'district' && $nextZone['city'] !== $id) {
+                // Walls: the troop must start the Move action adjacent to that district, and may enter only one opponent district per move.
                 $foreignDistricts++;
-                if ($foreignDistricts > 1 || $previous !== $nextZone['approach']) throw new UserException('Cross an opponent city wall from its adjacent desert, entering only one district.');
+                if ($foreignDistricts > 1 || $teleport || $index !== 0 || !in_array($step, $state['zones'][$from]['neighbors'], true)) throw new UserException('Enter one opponent district per move, starting the move adjacent to its walls.');
             }
             if ($index < count($route) - 1) foreach ($nextZone['units'] as $other => $count) if ((string) $other !== $id && $count > 0) throw new UserException('A battle stops movement.');
             $previous = $step;
@@ -323,23 +330,33 @@ class CoreGame extends \Bga\GameFramework\Table
         }
     }
 
-    public function battleChoice(array &$state, string $id, int $played, int $discarded, string $di): bool
+    /**
+     * Records a War Council choice. $di is a comma-separated list of battle DI cards.
+     * Returns '' while waiting for the other player, otherwise the winner's id.
+     * After resolution $state['battle'] is null when no aftermath choice remains.
+     */
+    public function battleChoice(array &$state, string $id, int $played, int $discarded, string $di): string
     {
         $battle = &$state['battle'];
         if ($battle === null || $battle['step'] !== 'cards' || isset($battle['choices'][$id]) || !in_array($id, [$battle['attacker'], $battle['defender']], true)) throw new UserException('It is not your battle choice.');
         $hand = $state['players'][$id]['battleHand'];
         if ($played === $discarded || !in_array($played, $hand, true) || !in_array($discarded, $hand, true)) throw new UserException('Choose two different battle cards from your hand.');
-        if ($di !== '') {
-            if (!isset(PrototypeRules::DI[$di]) || PrototypeRules::DI[$di]['phase'] !== 'battle' || !in_array($di, $state['players'][$id]['diHand'], true)) throw new UserException('Choose a battle DI card from your hand.');
-            if ($state['players'][$id]['pp'] < PrototypeRules::DI[$di]['cost']) throw new UserException('Not enough prayer for that DI card.');
+        $cards = $di === '' ? [] : explode(',', $di);
+        $available = array_count_values($state['players'][$id]['diHand']);
+        $cost = 0;
+        foreach (array_count_values($cards) as $card => $count) {
+            $card = (string) $card;
+            if (!isset(PrototypeRules::DI[$card]) || PrototypeRules::DI[$card]['phase'] !== 'battle' || ($available[$card] ?? 0) < $count) throw new UserException('Choose battle DI cards from your hand.');
+            $cost += PrototypeRules::DI[$card]['cost'] * $count;
         }
-        $battle['choices'][$id] = ['played' => $played, 'discarded' => $discarded, 'di' => $di];
-        if (count($battle['choices']) < 2) return false;
-        $this->resolveBattle($state);
-        return true;
+        if ($state['players'][$id]['pp'] < $cost) throw new UserException('Not enough prayer for those DI cards.');
+        $battle['choices'][$id] = ['played' => $played, 'discarded' => $discarded, 'di' => $cards];
+        if (count($battle['choices']) < 2) return '';
+        unset($battle);
+        return $this->resolveBattle($state);
     }
 
-    private function resolveBattle(array &$state): void
+    private function resolveBattle(array &$state): string
     {
         $battle = &$state['battle'];
         $zone = &$state['zones'][$battle['zone']];
@@ -348,18 +365,18 @@ class CoreGame extends \Bga\GameFramework\Table
             $choice = $battle['choices'][$id];
             $card = PrototypeRules::BATTLE_CARDS[$choice['played']];
             $attacking = $id === $battle['attacker'];
-            $di = $choice['di'];
-            if ($di !== '') {
+            foreach ($choice['di'] as $di) {
                 $this->spend($state, $id, PrototypeRules::DI[$di]['cost']);
                 $key = array_search($di, $state['players'][$id]['diHand'], true);
                 array_splice($state['players'][$id]['diHand'], $key, 1);
                 $state['diDiscard'][] = $di;
             }
+            $di = array_count_values($choice['di']);
             $totals[$id] = [
-                'strength' => ($zone['units'][$id] ?? 0) + $card['strength'] + $this->tileBonus($state, $id, 'strength') + $this->tileBonus($state, $id, $attacking ? 'attack' : 'defend') + (int) ($zone['city'] === $id) + (int) ($di === 'fury') * 2,
+                'strength' => ($zone['units'][$id] ?? 0) + $card['strength'] + $this->tileBonus($state, $id, 'strength') + $this->tileBonus($state, $id, $attacking ? 'attack' : 'defend') + (int) ($zone['city'] === $id) + ($di['fury'] ?? 0) * 2,
                 'damage' => $card['damage'] + $this->tileBonus($state, $id, 'damage'),
-                'pierce' => $card['pierce'] + (int) ($di === 'wound'),
-                'shield' => $card['shield'] + $this->tileBonus($state, $id, 'shield') + (int) ($di === 'wall') * 2,
+                'pierce' => $card['pierce'] + ($di['wound'] ?? 0),
+                'shield' => $card['shield'] + $this->tileBonus($state, $id, 'shield') + ($di['wall'] ?? 0) * 2,
             ];
             $state['players'][$id]['battleHand'] = array_values(array_diff($state['players'][$id]['battleHand'], [$choice['played'], $choice['discarded']]));
             $state['players'][$id]['battleDiscard'][] = $choice['played'];
@@ -378,39 +395,82 @@ class CoreGame extends \Bga\GameFramework\Table
             $zone['units'][$victim] = max(0, ($zone['units'][$victim] ?? 0) - $loss);
             if ($zone['units'][$victim] === 0) unset($zone['units'][$victim]);
         }
+        // Rewards: an attacker who wins and keeps a troop gains 1 Battle FP. A winning defender
+        // gains 1 Veteran, and every player who gained no FP gains 1 Veteran (so 2 for a winning defender).
         if ($battle['winner'] === $a && ($zone['units'][$a] ?? 0) > 0) $state['players'][$a]['permanent']++;
         else $state['players'][$a]['veterans']++;
-        $state['players'][$d]['veterans']++;
+        $state['players'][$d]['veterans'] += $battle['winner'] === $d ? 2 : 1;
         $battle['totals'] = $totals;
-        $battle['step'] = ($zone['units'][$battle['loser']] ?? 0) > 0 ? 'loser' : 'winner';
+        $winner = $battle['winner'];
+        unset($battle, $zone);
+        $this->setAftermathStep($state, 'loser');
+        return $winner;
+    }
+
+    /** Moves to the given aftermath step, skipping players without a troop. Returns true when the battle is over. */
+    private function setAftermathStep(array &$state, string $step): bool
+    {
+        $battle = $state['battle'];
+        $units = $state['zones'][$battle['zone']]['units'];
+        if ($step === 'loser' && ($units[$battle['loser']] ?? 0) === 0) $step = 'winner';
+        if ($step === 'winner' && ($units[$battle['winner']] ?? 0) === 0) {
+            $state['battle'] = null;
+            return true;
+        }
+        $state['battle']['step'] = $step;
+        return false;
+    }
+
+    /** The loser decides in the loser step; the winner picks the retreat zone and makes the winner's choice. */
+    public function aftermathActor(array $state): string
+    {
+        $battle = $state['battle'];
+        return $battle['step'] === 'loser' ? $battle['loser'] : $battle['winner'];
+    }
+
+    /** Adjacent free zones the losing troop may retreat to, never another player's city district. */
+    public function retreatOptions(array $state): array
+    {
+        $battle = $state['battle'];
+        $loser = $battle['loser'];
+        $units = $state['zones'][$battle['zone']]['units'][$loser] ?? 0;
+        $options = [];
+        foreach ($state['zones'][$battle['zone']]['neighbors'] as $key) {
+            $target = $state['zones'][$key] ?? null;
+            if ($target === null || ($target['kind'] === 'district' && $target['city'] !== $loser)) continue;
+            foreach ($target['units'] as $other => $count) if ((string) $other !== $loser && $count > 0) continue 2;
+            if (($target['units'][$loser] ?? 0) + $units > 5) continue;
+            $options[] = $key;
+        }
+        return $options;
     }
 
     public function battleAftermath(array &$state, string $id, string $choice, string $retreatTo): bool
     {
-        $battle = &$state['battle'];
-        if ($battle === null || !in_array($battle['step'], ['loser', 'winner'], true)) throw new UserException('There is no battle aftermath.');
-        $actor = $battle[$battle['step']];
-        if ($id !== $actor) throw new UserException('It is not your aftermath choice.');
+        $battle = $state['battle'];
+        if ($battle === null || !in_array($battle['step'], ['loser', 'retreat', 'winner'], true)) throw new UserException('There is no battle aftermath.');
+        if ($id !== $this->aftermathActor($state)) throw new UserException('It is not your aftermath choice.');
         $zoneKey = $battle['zone'];
-        $units = $state['zones'][$zoneKey]['units'][$id] ?? 0;
+        if ($battle['step'] === 'retreat') {
+            if ($choice !== 'retreat' || !in_array($retreatTo, $this->retreatOptions($state), true)) throw new UserException('Choose an adjacent free zone for the retreating troop.');
+            $loser = $battle['loser'];
+            $state['zones'][$retreatTo]['units'][$loser] = ($state['zones'][$retreatTo]['units'][$loser] ?? 0) + $state['zones'][$zoneKey]['units'][$loser];
+            unset($state['zones'][$zoneKey]['units'][$loser]);
+            return $this->setAftermathStep($state, 'winner');
+        }
         if ($choice === 'recall') {
+            $units = $state['zones'][$zoneKey]['units'][$id] ?? 0;
             $this->gain($state, $id, max(0, $units - 1));
             unset($state['zones'][$zoneKey]['units'][$id]);
-        } elseif ($choice === 'stay') {
-            if ($battle['step'] === 'loser' && ($state['zones'][$zoneKey]['units'][$battle['winner']] ?? 0) > 0) throw new UserException('The loser must recall or retreat.');
         } elseif ($choice === 'retreat' && $battle['step'] === 'loser') {
-            if (($state['zones'][$zoneKey]['units'][$battle['winner']] ?? 0) === 0 || !in_array($retreatTo, $state['zones'][$zoneKey]['neighbors'], true) || !isset($state['zones'][$retreatTo])) throw new UserException('Choose an adjacent retreat zone.');
-            $target = &$state['zones'][$retreatTo];
-            if ($target['kind'] === 'district' && $target['city'] !== $id) throw new UserException('You cannot retreat into another city.');
-            foreach ($target['units'] as $other => $count) if ((string) $other !== $id && $count > 0) throw new UserException('The retreat zone must be free.');
-            if (($target['units'][$id] ?? 0) + $units > 5) throw new UserException('Troop limit exceeded.');
-            $target['units'][$id] = ($target['units'][$id] ?? 0) + $units;
-            unset($state['zones'][$zoneKey]['units'][$id]);
-        } else throw new UserException('Invalid aftermath choice.');
-        if ($battle['step'] === 'loser') {
-            $battle['step'] = 'winner';
+            if (($state['zones'][$zoneKey]['units'][$battle['winner']] ?? 0) === 0) throw new UserException('The winner has no troop left, so you must recall.');
+            if (!$this->retreatOptions($state)) throw new UserException('No adjacent free zone is available, so you must recall.');
+            $state['battle']['step'] = 'retreat';
             return false;
+        } elseif ($choice !== 'stay' || $battle['step'] !== 'winner') {
+            throw new UserException('Invalid aftermath choice.');
         }
+        if ($battle['step'] === 'loser') return $this->setAftermathStep($state, 'winner');
         $state['battle'] = null;
         return true;
     }
@@ -443,8 +503,8 @@ class CoreGame extends \Bga\GameFramework\Table
             $choice = $state['night']['choices'][$id];
             $state['players'][$id]['veterans'] -= $choice['pray'];
             $this->gain($state, $id, $choice['pray']);
-            $draw = min($choice['draw'], intdiv($state['players'][$id]['veterans'], 2));
-            $state['players'][$id]['veterans'] -= $draw * 2;
+            $draw = min($choice['draw'], $state['players'][$id]['veterans']);
+            $state['players'][$id]['veterans'] -= $draw;
             $this->drawDi($state, $id, 1 + $draw);
             $recruit = min($choice['recruit'], $state['players'][$id]['veterans'], 12 - $this->unitCount($state, $id));
             $district = $choice['district'];
@@ -456,11 +516,36 @@ class CoreGame extends \Bga\GameFramework\Table
             $state['players'][$id]['slots'] = [];
             $state['players'][$id]['bought'] = [];
         }
+        // Destiny: fewest FP chooses a turn-order space first; ties go to the player who was leftmost.
         $old = array_flip($state['order']);
-        usort($state['order'], fn($a, $b) => $this->score($state, $a) <=> $this->score($state, $b) ?: $old[$a] <=> $old[$b]);
+        $queue = $state['order'];
+        usort($queue, fn($a, $b) => $this->score($state, $a) <=> $this->score($state, $b) ?: $old[$a] <=> $old[$b]);
+        $state['night'] = null;
+        $state['destiny'] = ['queue' => $queue, 'index' => 0, 'positions' => array_fill(0, count($queue), null)];
+    }
+
+    /** Places the chooser's order marker. Returns true once every marker is placed and the new Day can start. */
+    public function chooseDestiny(array &$state, string $id, int $position): bool
+    {
+        $destiny = $state['destiny'] ?? null;
+        if ($destiny === null || $destiny['queue'][$destiny['index']] !== $id) throw new UserException('It is not your turn order choice.');
+        if (!array_key_exists($position, $destiny['positions']) || $destiny['positions'][$position] !== null) throw new UserException('Choose an empty turn order space.');
+        $destiny['positions'][$position] = $id;
+        $destiny['index']++;
+        if ($destiny['index'] === count($destiny['queue']) - 1) {
+            // The last player takes the only remaining space.
+            $destiny['positions'][array_search(null, $destiny['positions'], true)] = $destiny['queue'][$destiny['index']];
+            $destiny['index']++;
+        }
+        if ($destiny['index'] < count($destiny['queue'])) {
+            $state['destiny'] = $destiny;
+            return false;
+        }
+        $state['order'] = array_values($destiny['positions']);
+        $state['destiny'] = null;
         $state['round']++;
         $state['turnIndex'] = 0;
-        $state['night'] = null;
+        return true;
     }
     public function getGameProgression(): int
     {

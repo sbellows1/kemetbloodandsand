@@ -39,19 +39,25 @@ class BattleChoice extends GameState
     {
         $state = $this->game->loadState();
         $id = (string) $this->game->getCurrentPlayerId();
-        $resolved = $this->game->battleChoice($state, $id, $played, $discarded, $di);
-        $message = $resolved ? 'The battle is resolved. ' . $this->game->getPlayerNameById((int) $state['battle']['winner']) . ' wins.' : $this->game->getPlayerNameById((int) $id) . ' has chosen battle cards.';
-        $this->game->notifyState($state, $message);
-        if (!$resolved) $this->game->gamestate->changeActivePlayer((int) $state['battle']['defender']);
-        return $resolved ? BattleAftermath::class : BattleChoice::class;
+        $winner = $this->game->battleChoice($state, $id, $played, $discarded, $di);
+        $message = $winner !== '' ? 'The battle is resolved. ' . $this->game->getPlayerNameById((int) $winner) . ' wins.' : $this->game->getPlayerNameById((int) $id) . ' has chosen battle cards.';
+        return $this->advance($state, $winner, $message);
     }
     public function zombie(int $playerId): string
     {
         $state = $this->game->loadState();
         $hand = $state['players'][(string) $playerId]['battleHand'];
-        $resolved = $this->game->battleChoice($state, (string) $playerId, $hand[0], $hand[1], '');
-        $this->game->notifyState($state, 'Battle cards selected automatically.');
-        if (!$resolved) $this->game->gamestate->changeActivePlayer((int) $state['battle']['defender']);
-        return $resolved ? BattleAftermath::class : BattleChoice::class;
+        $winner = $this->game->battleChoice($state, (string) $playerId, $hand[0], $hand[1], '');
+        return $this->advance($state, $winner, 'Battle cards selected automatically.');
+    }
+    private function advance(array $state, string $winner, string $message): string
+    {
+        $this->game->notifyState($state, $message);
+        if ($winner === '') {
+            $this->game->gamestate->changeActivePlayer((int) $state['battle']['defender']);
+            return BattleChoice::class;
+        }
+        // Both troops can be wiped out, leaving no aftermath choice.
+        return $state['battle'] === null ? NextPlayer::class : BattleAftermath::class;
     }
 }
