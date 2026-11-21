@@ -13,7 +13,10 @@ class Destiny extends GameState
 {
     public function __construct(protected Game $game)
     {
-        parent::__construct($game, id: 50, type: StateType::ACTIVE_PLAYER);
+        parent::__construct($game, id: 50, type: StateType::ACTIVE_PLAYER,
+            description: clienttranslate('${actplayer} must choose a turn order space'),
+            descriptionMyTurn: clienttranslate('${you} must choose a turn order space'),
+        );
     }
     public function onEnteringState(): void
     {
@@ -22,32 +25,29 @@ class Destiny extends GameState
     }
     public function getArgs(): array
     {
-        $state = $this->game->loadState();
-        return ['kemet' => $this->game->viewState($state)];
+        return [];
     }
     #[PossibleAction]
     public function actDestiny(int $position): string
     {
         $state = $this->game->loadState();
-        $id = (string) $this->game->getCurrentPlayerId();
-        $done = $this->game->chooseDestiny($state, $id, $position);
-        return $this->advance($state, $done, $this->game->getPlayerNameById((int) $id) . ' takes turn order space ' . ($position + 1) . '.');
+        $done = $this->game->chooseDestiny($state, (string) $this->game->getCurrentPlayerId(), $position);
+        return $this->advance($state, $done);
     }
     public function zombie(int $playerId): string
     {
         $state = $this->game->loadState();
         $position = (int) array_search(null, $state['destiny']['positions'], true);
         $done = $this->game->chooseDestiny($state, (string) $playerId, $position);
-        return $this->advance($state, $done, 'A turn order space is chosen automatically.');
+        return $this->advance($state, $done);
     }
-    private function advance(array $state, bool $done, string $message): string
+    private function advance(array $state, bool $done): string
     {
+        $this->game->notifyState($state);
         if (!$done) {
-            $this->game->notifyState($state, $message);
             $this->game->gamestate->changeActivePlayer((int) $state['destiny']['queue'][$state['destiny']['index']]);
             return Destiny::class;
         }
-        $this->game->notifyState($state, $message . ' Day ' . $state['round'] . ' begins.');
         $this->game->gamestate->changeActivePlayer((int) $state['order'][0]);
         return PlayerTurn::class;
     }

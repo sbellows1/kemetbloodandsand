@@ -1,71 +1,98 @@
-#kemet-root { color:#3e322b; font:15px/1.45 system-ui,sans-serif; max-width:1460px; margin:16px auto; padding:0 14px 32px; }
+/* Kemet: Blood and Sand — BGA interface */
+
+#kemet-root { --ruby:#b8322a; --sapphire:#2f6aa8; --diamond:#c9a227; --onyx:#2d2d35; --sand:#f6ecd6; --ink:#3e322b; --select:#ffd23f;
+    color:var(--ink); font-size:14px; line-height:1.4; }
 #kemet-root * { box-sizing:border-box; }
-#kemet-root h1,#kemet-root h2,#kemet-root h3 { font-family:Georgia,serif; margin:0 0 10px; }
-#kemet-root h1 { font-size:32px; color:#fff4df; text-shadow:0 2px 8px #1d140f; }
-#kemet-root h2 { font-size:22px; border-bottom:2px solid #c9aa70; padding-bottom:5px; }
-#kemet-root h3 { font-size:17px; }
-#kemet-root p { margin:4px 0 11px; }
-.kemet-title { display:flex; justify-content:space-between; align-items:center; gap:12px; min-height:158px; padding:18px 22px; background:linear-gradient(90deg,#29180fe8,#29180f88 54%,#29180f22),url('img/prototype-hero.jpg') center 55%/cover; border:2px solid #b7975d; border-radius:12px; color:#fff4df; }
-.kemet-title small { letter-spacing:.2em; color:#f6d39a; }
-.kemet-title p { color:#fff2d9; text-shadow:0 1px 5px #24150e; }
-#kemet-phase { display:flex; flex-direction:column; background:linear-gradient(#302018ad,#302018e0),url('img/prototype-poster.jpg') center 40%/cover; color:#fff4da; padding:12px 18px; border:1px solid #d6b575; border-radius:8px; white-space:nowrap; text-shadow:0 1px 3px #21140e; }
-#kemet-players { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:8px; margin:12px 0; }
-.kemet-player { border-left:8px solid var(--player); background:#fff8ec; padding:6px; display:grid; grid-template-columns:88px minmax(0,1fr); gap:8px; min-height:86px; box-shadow:0 1px 3px #967e6338; }
-.kemet-player-art { display:block; width:88px; min-height:74px; background-image:url('img/prototype-players.jpg'); background-size:500% 100%; background-position:0 0; border-radius:3px; }
-.kemet-player-art.art-1 { background-position:25% 0; }
-.kemet-player-art.art-2 { background-position:50% 0; }
-.kemet-player-art.art-3 { background-position:75% 0; }
-.kemet-player-art.art-4 { background-position:100% 0; }
-.kemet-player-copy { display:flex; flex-direction:column; min-width:0; }
-.kemet-player small { color:#725f51; }
-.kemet-layout { display:grid; grid-template-columns:minmax(0,2fr) minmax(290px,1fr); gap:16px; align-items:start; }
-.kemet-layout>section,.kemet-layout>aside>section { background:#fff9ed; border:1px solid #cdb893; border-radius:10px; padding:15px; margin-bottom:12px; }
-.kemet-hint { color:#6e6155; font-size:13px; }
-#kemet-map-scroll { overflow:auto; border:2px solid #9b7650; border-radius:8px; background:#d3b583; }
-#kemet-map { position:relative; width:100%; min-width:580px; aspect-ratio:1381 / 1700; background:url('img/prototype-board.jpg') center/100% 100% no-repeat; }
-.kemet-city-site { position:absolute; z-index:1; transform:translate(-50%,-50%); padding:2px 5px; border-radius:4px; background:#4e2f1de0; color:#fff9e9; border:1px solid #dfc085; font:bold 11px Georgia,serif; pointer-events:none; }
-.kemet-city-site.storm { background:#34343bdc; }
-.kemet-city-site.outside { background:#6c6b6bdc; }
-.kemet-inactive-district { position:absolute; z-index:1; transform:translate(-50%,-50%); min-width:30px; height:28px; border:2px solid #777; border-radius:50%; background:#4c4c51dc; color:white; display:grid; place-items:center; font:bold 10px Georgia,serif; pointer-events:none; }
-.kemet-map-pin { position:absolute; z-index:2; transform:translate(-50%,-50%); width:31px; height:31px; border:3px solid var(--owner); border-radius:50%; background:#fff8dbed; color:#402b1b; box-shadow:0 1px 6px #1d120fa3; display:grid; place-items:center; cursor:pointer; font:bold 11px Georgia,serif; padding:0; }
-.kemet-map-pin span { line-height:1; white-space:nowrap; }
-.kemet-map-pin.temple { border-radius:7px; background:#e4f0d9f2; color:#335336; }
-.kemet-map-pin.sanctuary { border-radius:7px; background:#e9e2f2f2; color:#543766; }
-.kemet-map-pin.desert { background:#f6e7c4e8; }
-.kemet-map-pin.route { box-shadow:0 0 0 3px #f7e360,0 1px 6px #1d120fa3; }
-.kemet-map-pin.selected,.kemet-map-pin:hover,.kemet-map-pin:focus-visible { z-index:4; outline:3px solid #fff; box-shadow:0 0 0 6px #b84029,0 2px 8px #1d120fa3; }
-.kemet-map-pin b { position:absolute; right:-10px; bottom:-7px; min-width:16px; height:16px; padding:1px 3px; border-radius:9px; background:var(--owner); color:white; font:700 10px/13px system-ui,sans-serif; }
-.kemet-map-pin i { position:absolute; left:-10px; top:-8px; width:16px; height:16px; border-radius:2px; background:#e24c3a; color:white; font:700 10px/16px system-ui,sans-serif; }
-.kemet-map-pin i.sapphire { background:#3979b2; }
-.kemet-map-pin i.diamond { background:#b39735; }
-.kemet-map-pin i.onyx { background:#33333d; }
-#kemet-map-detail { min-height:72px; display:flex; flex-direction:column; gap:3px; padding:9px 11px; background:#f4e7cb; border:1px solid #c9ad7e; border-radius:7px; margin-top:9px; font-size:13px; }
-#kemet-map-detail strong { font:700 16px Georgia,serif; }
-#kemet-map-detail small { color:#625344; }
-.kemet-action-form { border-top:1px solid #d8c6a8; padding:12px 0 10px; }
-.kemet-field { display:flex; flex-direction:column; gap:3px; margin:7px 0; font-size:13px; }
-.kemet-field select,.kemet-field input[type=number] { width:100%; padding:7px; border:1px solid #aa987e; border-radius:5px; background:white; font:inherit; }
-.kemet-field input[type=checkbox] { align-self:flex-start; width:18px; height:18px; }
-#kemet-root button[data-kemet-action] { border:0; border-radius:6px; background:#8d392b; color:white; padding:8px 12px; margin:5px 5px 0 0; cursor:pointer; font-weight:700; }
-#kemet-root button[data-kemet-action]:hover { background:#63291f; }
-#kemet-root button[data-kemet-action].secondary { background:#6b655a; }
-.kemet-used { display:flex; flex-wrap:wrap; gap:4px; }
-.kemet-used span { background:#e8d7b7; border-radius:15px; padding:2px 7px; font-size:12px; }
-.kemet-tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:6px; max-height:350px; overflow:auto; }
-.kemet-tile { padding:0; border-left:6px solid #a14435; background:#f8e8dd; display:flex; flex-direction:column; font-size:12px; overflow:hidden; }
-.kemet-tile-art { display:block; height:55px; background-image:url('img/prototype-power-art.jpg'); background-size:400% auto; background-position:0 top; }
-.kemet-tile-art.sapphire { background-position:33.333% top; }
-.kemet-tile-art.diamond { background-position:66.667% top; }
-.kemet-tile-art.onyx { background-position:100% top; }
-.kemet-tile-copy { display:flex; flex-direction:column; padding:6px 8px; }
-.kemet-tile.sapphire { border-color:#4779a1; background:#e7f0f7; }
-.kemet-tile.diamond { border-color:#d2ad45; background:#f9f2dc; }
-.kemet-tile.onyx { border-color:#3f414b; background:#e6e6eb; }
-#kemet-log ol { max-height:220px; overflow:auto; margin:0; padding-left:23px; }
-#kemet-log li { margin-bottom:4px; }
-@media(max-width:850px) { .kemet-layout { grid-template-columns:1fr; } }
-@media(max-width:520px) { .kemet-title { flex-wrap:wrap; } }
+#kemet-root h3 { font:700 15px Georgia,serif; margin:8px 0 6px; }
+#kemet-root h4 { font:700 13px Georgia,serif; margin:0 0 4px; }
 
+/* Info bar: round, phase, turn order, current battle */
+#kemet-info { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; padding:6px 10px; margin-bottom:8px; background:var(--sand); border:1px solid #cdb893; border-radius:8px; }
+.kemet-round strong { font-family:Georgia,serif; }
+.kemet-order { display:flex; flex-wrap:wrap; gap:6px; list-style:none; margin:0; padding:0; }
+.kemet-order li { padding:2px 6px; border-radius:12px; background:#fff8ec; }
+.kemet-order li.current { outline:2px solid var(--select); }
+.kemet-order li.empty { opacity:.6; font-style:italic; }
+.kemet-chip { font-weight:700; color:var(--player); text-shadow:0 0 1px #fff; }
+.kemet-battle-info { padding:2px 8px; border-radius:6px; background:#f3d5cf; }
 
+.kemet-layout { display:grid; grid-template-columns:minmax(0,3fr) minmax(260px,2fr); gap:10px; align-items:start; }
+@media (max-width:900px) { .kemet-layout { grid-template-columns:1fr; } }
+.kemet-box { background:#fff9ed; border:1px solid #cdb893; border-radius:8px; padding:8px 10px; margin-bottom:10px; }
 
+/* Board */
+#kemet-map-wrap { overflow:auto; border:2px solid #9b7650; border-radius:8px; background:#d3b583; }
+#kemet-map { position:relative; width:100%; min-width:520px; aspect-ratio:1381 / 1700; background:url('img/prototype-board.jpg') center/100% 100% no-repeat; }
+.kemet-city-site { position:absolute; transform:translate(-50%,-50%); padding:1px 5px; border-radius:4px; background:#4e2f1de0; color:#fff9e9; font:bold 11px Georgia,serif; pointer-events:none; }
+.kemet-closed { position:absolute; transform:translate(-50%,-50%); width:34px; height:34px; border-radius:50%; background:#3c3c42b0; pointer-events:none; }
+.kemet-pin { position:absolute; z-index:2; transform:translate(-50%,-50%); width:34px; height:34px; padding:0; border:3px solid var(--owner); border-radius:50%;
+    background:#fff8dbee; color:#402b1b; box-shadow:0 1px 5px #1d120f99; display:grid; place-items:center; font:bold 11px Georgia,serif; cursor:default; }
+.kemet-pin.temple, .kemet-pin.sanctuary { border-radius:8px; }
+.kemet-pin.temple { background:#e4f0d9f2; }
+.kemet-pin.sanctuary { background:#ece3f4f2; }
+.kemet-pin.desert { background:#f6e7c4e8; }
+.kemet-pin.selectable { cursor:pointer; z-index:3; box-shadow:0 0 0 4px var(--select),0 0 12px 4px #ffd23fcc; animation:kemet-glow 1.4s ease-in-out infinite; }
+.kemet-pin.selected { z-index:4; box-shadow:0 0 0 4px #b84029,0 2px 8px #1d120fa3; animation:none; }
+.kemet-pin.battle { box-shadow:0 0 0 4px #b84029; }
+@keyframes kemet-glow { 50% { box-shadow:0 0 0 4px var(--select),0 0 4px 1px #ffd23f66; } }
+.kemet-troop { position:absolute; bottom:-9px; right:-12px; min-width:18px; height:18px; padding:0 4px; border-radius:9px; background:var(--player); color:#fff;
+    border:1px solid #fff; font:700 11px/16px Arial,sans-serif; }
+.kemet-troop + .kemet-troop { right:auto; left:-12px; }
+.kemet-pyramid { position:absolute; top:-10px; left:-12px; min-width:18px; height:18px; padding:0 3px; border-radius:3px; color:#fff; font:700 11px/18px Arial,sans-serif; font-style:normal; }
+.kemet-pyramid.ruby { background:var(--ruby); } .kemet-pyramid.sapphire { background:var(--sapphire); }
+.kemet-pyramid.diamond { background:var(--diamond); color:#2b2100; } .kemet-pyramid.onyx { background:var(--onyx); }
+.kemet-flash { animation:kemet-flash .6s ease-out; }
+.kemet-flash-battle { animation:kemet-battle .6s ease-out; }
+@keyframes kemet-flash { 0% { transform:translate(-50%,-50%) scale(1.5); } 100% { transform:translate(-50%,-50%) scale(1); } }
+@keyframes kemet-battle { 0%,100% { transform:translate(-50%,-50%) rotate(0); } 25% { transform:translate(-50%,-50%) rotate(-12deg); } 75% { transform:translate(-50%,-50%) rotate(12deg); } }
+.kemet-ghost { position:absolute; z-index:10; transform:translate(-50%,-50%); width:26px; height:26px; border-radius:50%; background:var(--player); color:#fff; border:2px solid #fff;
+    display:grid; place-items:center; font:700 12px Arial,sans-serif; transition:left .6s ease-in-out, top .6s ease-in-out; pointer-events:none; }
 
+/* Colorblind preference: shape symbols for pyramid/tile colors and player initials on troops */
+#kemet-root .kemet-sym { display:none; margin-right:2px; }
+.kemet-symbols-on #kemet-root .kemet-sym { display:inline; }
+.kemet-symbols-on .kemet-mini-tile .kemet-sym { display:inline; }
+.kemet-symbols-on .kemet-troop::before { content:attr(data-initial) ' '; }
+.kemet-mini-tile .kemet-sym { display:none; }
+
+/* Your action board and hand */
+.kemet-board { display:flex; flex-direction:column; align-items:center; gap:4px; }
+.kemet-tier { display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:4px; }
+.kemet-tier-label { width:18px; font:700 12px Georgia,serif; color:#8a7560; }
+.kemet-slot { min-width:64px; min-height:34px; padding:3px 6px; border:2px solid #b69a6c; border-radius:6px; background:#fbf3e2; color:var(--ink); font-size:12px; cursor:default; }
+.kemet-slot.buy { border-left-width:6px; }
+.kemet-slot.buy.ruby { border-left-color:var(--ruby); } .kemet-slot.buy.sapphire { border-left-color:var(--sapphire); }
+.kemet-slot.buy.diamond { border-left-color:var(--diamond); } .kemet-slot.buy.onyx { border-left-color:var(--onyx); }
+.kemet-slot.used { background:var(--player); color:#fff; border-color:var(--player); opacity:.85; }
+.kemet-hand { display:flex; flex-wrap:wrap; gap:5px; }
+.kemet-card { display:flex; flex-direction:column; justify-content:space-between; width:76px; min-height:58px; padding:4px; border:2px solid #9d8562; border-radius:6px; background:#fffaf0; color:var(--ink); font-size:11px; text-align:left; cursor:default; }
+.kemet-card strong { font-size:11px; }
+.kemet-card.di { background:#eef0fb; border-color:#7b7fae; }
+.kemet-card.di.day { background:#fdf5d8; border-color:#b49a3a; }
+.kemet-card-stats { display:flex; flex-wrap:wrap; gap:3px; font-weight:700; }
+.kemet-slot.selectable, .kemet-card.selectable, .kemet-tile.selectable { cursor:pointer; box-shadow:0 0 0 3px var(--select); }
+.kemet-slot.selectable:hover, .kemet-card.selectable:hover, .kemet-tile.selectable:hover { transform:translateY(-2px); }
+.kemet-card.selected { box-shadow:0 0 0 3px #2f8f4e; }
+.kemet-card.discarded { box-shadow:0 0 0 3px #888; opacity:.6; }
+.kemet-empty { color:#8a7560; font-style:italic; font-size:12px; }
+
+/* Power tiles */
+.kemet-tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:6px; }
+.kemet-tile-group { display:flex; flex-direction:column; gap:3px; }
+.kemet-tile { display:flex; align-items:center; gap:5px; padding:3px 5px; border:1px solid #c7b38f; border-left:6px solid; border-radius:4px; background:#fffaf0; color:var(--ink); font-size:11px; text-align:left; cursor:default; }
+.kemet-tile.ruby { border-left-color:var(--ruby); } .kemet-tile.sapphire { border-left-color:var(--sapphire); }
+.kemet-tile.diamond { border-left-color:var(--diamond); } .kemet-tile.onyx { border-left-color:var(--onyx); }
+.kemet-tile-level { font:700 12px Georgia,serif; }
+.kemet-sym.ruby { color:var(--ruby); } .kemet-sym.sapphire { color:var(--sapphire); } .kemet-sym.diamond { color:var(--diamond); } .kemet-sym.onyx { color:var(--onyx); }
+
+/* BGA player panels */
+.kemet-panel { display:grid; grid-template-columns:44px 1fr; gap:4px 6px; margin-top:4px; font-size:12px; }
+.kemet-portrait { grid-row:span 2; width:44px; height:44px; border-radius:4px; background:url('img/prototype-players.jpg') 0 0/500% 100%; }
+.kemet-portrait.art-1 { background-position:25% 0; } .kemet-portrait.art-2 { background-position:50% 0; }
+.kemet-portrait.art-3 { background-position:75% 0; } .kemet-portrait.art-4 { background-position:100% 0; }
+.kemet-stats { display:flex; flex-wrap:wrap; gap:2px 8px; }
+.kemet-stat { white-space:nowrap; }
+.kemet-mini-tiles { display:flex; flex-wrap:wrap; gap:2px; }
+.kemet-mini-tile { min-width:18px; height:16px; padding:0 3px; border-radius:3px; color:#fff; font:700 10px/16px Arial,sans-serif; text-align:center; }
+.kemet-mini-tile.ruby { background:#b8322a; } .kemet-mini-tile.sapphire { background:#2f6aa8; }
+.kemet-mini-tile.diamond { background:#c9a227; color:#2b2100; } .kemet-mini-tile.onyx { background:#2d2d35; }

@@ -8,6 +8,9 @@ use Bga\Games\kemetbloodandsands\States\PlayerTurn;
 
 class CoreGame extends \Bga\GameFramework\Table
 {
+    /** Log events queued by rule methods and sent by notifyState(), in order. */
+    private array $events = [];
+
     public function loadState(): array
     {
         $json = $this->getUniqueValueFromDB('SELECT state_json FROM kemet_state WHERE id = 1');
@@ -17,8 +20,7 @@ class CoreGame extends \Bga\GameFramework\Table
     public function saveState(array $state): void
     {
         foreach ($state['players'] as $id => $player) {
-            $score = $this->score($state, (string) $id);
-            $this->bga->playerScore->set((int) $id, $score);
+            $this->bga->playerScore->set((int) $id, $this->score($state, (string) $id));
         }
         $json = self::escapeStringForDB(json_encode($state, JSON_THROW_ON_ERROR));
         self::DbQuery("REPLACE INTO kemet_state (id, state_json) VALUES (1, '$json')");
@@ -36,6 +38,10 @@ class CoreGame extends \Bga\GameFramework\Table
         self::DbQuery('INSERT INTO player (player_id, player_color, player_name) VALUES ' . implode(',', $query));
         $this->reattributeColorsBasedOnPreferences($players, $gameinfos['player_colors']);
         $this->reloadPlayersBasicInfos();
+
+        $this->bga->tableStats->init('rounds', 1);
+        $this->bga->playerStats->init(['battles_fought', 'battles_won', 'battle_fp', 'units_recruited', 'pyramid_levels', 'tiles_bought'], 0);
+
         $order = array_map('strval', array_keys($players));
         shuffle($order);
         $count = count($order);
@@ -50,8 +56,8 @@ class CoreGame extends \Bga\GameFramework\Table
             $playerState[$id] = [
                 'pp' => 7, 'permanent' => 0, 'veterans' => 0,
                 'slots' => [], 'bought' => [], 'tiles' => [],
-                'battleHand' => array_keys(PrototypeRules::BATTLE_CARDS),
-                'battleDiscard' => [], 'diHand' => ['diversion'],
+                'battleHand' => array_keys(PrototypeRules::battleCards()),
+                'battleDiscard' => [], 'battlePlayed' => [], 'diHand' => ['diversion'],
             ];
         }
         $deck = [];
@@ -62,18 +68,19 @@ class CoreGame extends \Bga\GameFramework\Table
         $state = [
             'round' => 1, 'order' => $order, 'turnIndex' => 0, 'colors' => $activeColors,
             'zones' => $zones, 'players' => $playerState,
-            'market' => array_fill_keys(array_keys(PrototypeRules::TILES), true),
+            'market' => array_fill_keys(array_keys(PrototypeRules::tiles()), true),
             'diDeck' => $deck, 'diDiscard' => [], 'battle' => null, 'night' => null, 'destiny' => null,
-            'log' => ['The gods gather their armies.'],
         ];
         foreach ($order as $id) {
             $this->drawDi($state, $id, 2);
-            $starter = null;
             $starterColor = $state['zones']["c{$id}_1"]['pyramid']['color'];
-            foreach (PrototypeRules::TILES as $key => $tile) {
-                if ($tile['color'] === $starterColor && $tile['level'] === 1 && !empty($state['market'][$key])) { $starter = $key; break; }
+            foreach (PrototypeRules::tiles() as $key => $tile) {
+                if ($tile['color'] === $starterColor && $tile['level'] === 1 && !empty($state['market'][$key])) {
+                    $state['market'][$key] = false;
+                    $state['players'][$id]['tiles'][] = $key;
+                    break;
+                }
             }
-            if ($starter !== null) { $state['market'][$starter] = false; $state['players'][$id]['tiles'][] = $starter; }
         }
         $this->saveState($state);
         $this->gamestate->changeActivePlayer((int) $order[0]);
@@ -87,13 +94,23 @@ class CoreGame extends \Bga\GameFramework\Table
         return [
             'players' => $players,
             'kemet' => $this->viewState($state, (string) $currentPlayerId),
+        ] + $this->definitions();
+    }
+
+    /** Static catalogs the client needs to render and validate choices. */
+    public function definitions(): array
+    {
+        return [
             'slots' => PrototypeRules::SLOTS,
-            'tiles' => PrototypeRules::TILES,
-            'battleCards' => PrototypeRules::BATTLE_CARDS,
-            'diCards' => PrototypeRules::DI,
+            'tiles' => PrototypeRules::tiles(),
+            'battleCards' => PrototypeRules::battleCards(),
+            'diCards' => PrototypeRules::di(),
+            'colorNames' => PrototypeRules::colorNames(),
+            'actionNames' => PrototypeRules::actionNames(),
         ];
     }
 
+    /** Public view of the state; the viewer's own hands are added when $viewer is given. */
     public function viewState(array $state, string $viewer = ''): array
     {
         $view = $state;
@@ -103,9 +120,8 @@ class CoreGame extends \Bga\GameFramework\Table
             $player['score'] = $this->score($state, (string) $id);
             $player['diCount'] = count($player['diHand']);
             $player['battleCount'] = count($player['battleHand']);
-            $player['battleDiscardCount'] = count($player['battleDiscard']);
-            unset($player['battleDiscard']);
-            unset($player['diHand'], $player['battleHand']);
+            $player['battlePlayed'] ??= [];
+            unset($player['diHand'], $player['battleHand'], $player['battleDiscard']);
             if ((string) $id === $viewer) {
                 $player['diHand'] = $state['players'][$id]['diHand'];
                 $player['battleHand'] = $state['players'][$id]['battleHand'];
@@ -124,18 +140,44 @@ class CoreGame extends \Bga\GameFramework\Table
         return $view;
     }
 
-    public function notifyState(array $state, string $message = ''): void
+    /** Queues a log notification. 'player_id' / 'player_id2' args get matching player names. */
+    public function event(string $type, string $message, array $args = []): void
     {
-        $state['log'][] = $message;
-        if (count($state['log']) > 12) $state['log'] = array_slice($state['log'], -12);
+        foreach (['player_id' => 'player_name', 'player_id2' => 'player_name2'] as $idKey => $nameKey) {
+            if (isset($args[$idKey])) $args[$nameKey] = $this->getPlayerNameById((int) $args[$idKey]);
+        }
+        $this->events[] = [$type, $message, $args];
+    }
+
+    /**
+     * Saves the state, sends queued log events, then one silent public state sync
+     * and each player's private hands.
+     */
+    public function notifyState(array $state): void
+    {
         $this->saveState($state);
-        $this->bga->notify->all('kemetChanged', $message ?: '', ['kemet' => $this->viewState($state)]);
+        $events = $this->events;
+        $this->events = [];
+        foreach ($events as [$type, $message, $args]) $this->bga->notify->all($type, $message, $args);
+        $this->bga->notify->all('kemetState', '', ['kemet' => $this->viewState($state)]);
+        foreach ($state['players'] as $id => $player) {
+            $this->bga->notify->player((int) $id, 'hand', '', ['diHand' => $player['diHand'], 'battleHand' => $player['battleHand']]);
+        }
+    }
+
+    /** Log argument for a zone: a nested, translatable "<name>" or "<city> <district>". */
+    public function zoneArg(array $state, string $key): array
+    {
+        $zone = $state['zones'][$key];
+        return $zone['district']
+            ? ['log' => '${city_name} ${district}', 'args' => ['city_name' => $zone['name'], 'district' => $zone['district'], 'i18n' => ['city_name']]]
+            : ['log' => '${name}', 'args' => ['name' => $zone['name'], 'i18n' => ['name']]];
     }
 
     public function score(array $state, string $id): int
     {
         $score = $state['players'][$id]['permanent'];
-        foreach ($state['zones'] as $key => $zone) {
+        foreach ($state['zones'] as $zone) {
             if ($this->controller($zone) !== $id) continue;
             if ($zone['kind'] === 'temple') $score++;
             if (($zone['pyramid']['level'] ?? 0) === 4) $score++;
@@ -163,21 +205,35 @@ class CoreGame extends \Bga\GameFramework\Table
 
     public function requireSlot(array $state, string $id, string $slot, string $action): void
     {
-        if (!isset(PrototypeRules::SLOTS[$slot]) || PrototypeRules::SLOTS[$slot]['action'] !== $action) throw new UserException('Choose an action space of the right kind.');
+        if (!isset(PrototypeRules::SLOTS[$slot]) || PrototypeRules::SLOTS[$slot]['action'] !== $action) throw new UserException(clienttranslate('Choose an action space of the right kind.'));
         $used = $state['players'][$id]['slots'];
-        if (in_array($slot, $used, true) || count($used) >= 5) throw new UserException('That action space is unavailable.');
+        if (in_array($slot, $used, true) || count($used) >= 5) throw new UserException(clienttranslate('That action space is unavailable.'));
         $tiers = array_unique(array_map(fn($s) => PrototypeRules::SLOTS[$s]['tier'], array_merge($used, [$slot])));
-        if (5 - count($used) - 1 < 3 - count($tiers)) throw new UserException('Leave enough tokens to cover all three action tiers.');
+        if (5 - count($used) - 1 < 3 - count($tiers)) throw new UserException(clienttranslate('Leave enough tokens to cover all three action tiers.'));
+    }
+
+    /** True when the slot is free and placing a token there keeps the Equilibrium rule satisfiable. */
+    public function slotAllowed(array $state, string $id, string $slot): bool
+    {
+        try {
+            $this->requireSlot($state, $id, $slot, PrototypeRules::SLOTS[$slot]['action']);
+            return true;
+        } catch (UserException) {
+            return false;
+        }
     }
 
     public function spend(array &$state, string $id, int $cost): void
     {
-        if ($cost < 0 || $state['players'][$id]['pp'] < $cost) throw new UserException('Not enough prayer points.');
+        if ($cost < 0 || $state['players'][$id]['pp'] < $cost) throw new UserException(clienttranslate('Not enough prayer points.'));
         $state['players'][$id]['pp'] -= $cost;
     }
-    public function gain(array &$state, string $id, int $amount): void
+    /** Gains PP up to the cap of 11 and returns the amount actually gained. */
+    public function gain(array &$state, string $id, int $amount): int
     {
-        $state['players'][$id]['pp'] = min(11, $state['players'][$id]['pp'] + max(0, $amount));
+        $before = $state['players'][$id]['pp'];
+        $state['players'][$id]['pp'] = min(11, $before + max(0, $amount));
+        return $state['players'][$id]['pp'] - $before;
     }
     public function unitCount(array $state, string $id): int
     {
@@ -188,42 +244,47 @@ class CoreGame extends \Bga\GameFramework\Table
     public function tileBonus(array $state, string $id, string $effect): int
     {
         $n = 0;
-        foreach ($state['players'][$id]['tiles'] as $key) if (PrototypeRules::TILES[$key]['effect'] === $effect) $n++;
+        $tiles = PrototypeRules::tiles();
+        foreach ($state['players'][$id]['tiles'] as $key) if ($tiles[$key]['effect'] === $effect) $n++;
         return $n;
     }
 
-    public function doPray(array &$state, string $id, string $slot): string
+    public function doPray(array &$state, string $id, string $slot): void
     {
         $this->requireSlot($state, $id, $slot, 'pray');
-        $this->gain($state, $id, 2 + $this->tileBonus($state, $id, 'pray'));
+        $pp = $this->gain($state, $id, 2 + $this->tileBonus($state, $id, 'pray'));
         $state['players'][$id]['slots'][] = $slot;
-        return 'prays';
+        $this->event('pray', clienttranslate('${player_name} prays and gains ${pp} PP'), ['player_id' => $id, 'pp' => $pp]);
     }
 
-    public function doRaise(array &$state, string $id, string $slot, string $zoneKey, string $color, int $level): string
+    public function doRaise(array &$state, string $id, string $slot, string $zoneKey, string $color, int $level): void
     {
         $this->requireSlot($state, $id, $slot, 'raise');
-        if (!isset($state['zones'][$zoneKey]) || $state['zones'][$zoneKey]['city'] !== $id || !in_array($color, $state['colors'], true) || $level < 1 || $level > 4) throw new UserException('Invalid pyramid choice.');
-        $zone = &$state['zones'][$zoneKey];
-        $old = $zone['pyramid'];
-        if ($old !== null && ($old['owner'] !== $id || $old['color'] !== $color || $level <= $old['level'])) throw new UserException('Choose your pyramid and a higher level.');
+        if (!isset($state['zones'][$zoneKey]) || $state['zones'][$zoneKey]['city'] !== $id || !in_array($color, $state['colors'], true) || $level < 1 || $level > 4) throw new UserException(clienttranslate('Invalid pyramid choice.'));
+        $old = $state['zones'][$zoneKey]['pyramid'];
+        if ($old !== null && ($old['owner'] !== $id || $old['color'] !== $color || $level <= $old['level'])) throw new UserException(clienttranslate('Choose your pyramid and a higher level.'));
         if ($old === null) {
-            foreach ($state['zones'] as $other) if (($other['pyramid']['owner'] ?? null) === $id && ($other['pyramid']['color'] ?? null) === $color) throw new UserException('You already have a pyramid of that color.');
+            foreach ($state['zones'] as $other) if (($other['pyramid']['owner'] ?? null) === $id && ($other['pyramid']['color'] ?? null) === $color) throw new UserException(clienttranslate('You already have a pyramid of that color.'));
         }
         $cost = 0;
         for ($i = ($old['level'] ?? 0) + 1; $i <= $level; $i++) $cost += $i;
         $this->spend($state, $id, $cost);
-        $zone['pyramid'] = ['owner' => $id, 'color' => $color, 'level' => $level];
+        $state['zones'][$zoneKey]['pyramid'] = ['owner' => $id, 'color' => $color, 'level' => $level];
         $state['players'][$id]['slots'][] = $slot;
-        return "raises a $color pyramid to level $level";
+        $this->bga->playerStats->inc('pyramid_levels', $level - ($old['level'] ?? 0), (int) $id);
+        $this->event('raise', clienttranslate('${player_name} raises a ${color_name} pyramid to level ${level} in ${zone_name} for ${cost} PP'), [
+            'player_id' => $id, 'color_name' => PrototypeRules::colorNames()[$color], 'level' => $level, 'cost' => $cost,
+            'zone_name' => $this->zoneArg($state, $zoneKey), 'zone' => $zoneKey, 'i18n' => ['color_name'],
+        ]);
     }
 
-    public function doBuy(array &$state, string $id, string $slot, string $tile): string
+    public function doBuy(array &$state, string $id, string $slot, string $tile): void
     {
         $this->requireSlot($state, $id, $slot, 'buy');
-        if (!isset(PrototypeRules::TILES[$tile]) || empty($state['market'][$tile])) throw new UserException('That power tile is unavailable.');
-        $def = PrototypeRules::TILES[$tile];
-        if (in_array($def['color'], $state['players'][$id]['bought'], true)) throw new UserException('You already bought a tile of that color today.');
+        $tiles = PrototypeRules::tiles();
+        if (!isset($tiles[$tile]) || empty($state['market'][$tile])) throw new UserException(clienttranslate('That power tile is unavailable.'));
+        $def = $tiles[$tile];
+        if (in_array($def['color'], $state['players'][$id]['bought'], true)) throw new UserException(clienttranslate('You already bought a tile of that color today.'));
         $ownPyramid = false;
         $foreignPyramid = false;
         foreach ($state['zones'] as $zone) {
@@ -231,13 +292,13 @@ class CoreGame extends \Bga\GameFramework\Table
             if ($zone['city'] === $id) $ownPyramid = true;
             else $foreignPyramid = true;
         }
-        if (!$ownPyramid && !$foreignPyramid) throw new UserException('Control a pyramid of this color and level first.');
-        if ($ownPyramid && $slot !== 'buy_' . $def['color'] && !$foreignPyramid) throw new UserException('Use the matching buy action space.');
+        if (!$ownPyramid && !$foreignPyramid) throw new UserException(clienttranslate('Control a pyramid of this color and level first.'));
+        if ($ownPyramid && $slot !== 'buy_' . $def['color'] && !$foreignPyramid) throw new UserException(clienttranslate('Use the matching buy action space.'));
         if ($foreignPyramid) {
             $slotColor = substr($slot, 4);
             $hasToken = false;
             foreach ($state['zones'] as $zone) if ($zone['city'] === $id && ($zone['pyramid']['color'] ?? null) === $slotColor) $hasToken = true;
-            if (!$hasToken) throw new UserException('Use a buy space with one of your pyramid tokens.');
+            if (!$hasToken) throw new UserException(clienttranslate('Use a buy space with one of your pyramid tokens.'));
         }
         $this->spend($state, $id, $def['level']);
         $state['market'][$tile] = false;
@@ -246,78 +307,93 @@ class CoreGame extends \Bga\GameFramework\Table
         $state['players'][$id]['slots'][] = $slot;
         if ($def['effect'] === 'point') $state['players'][$id]['permanent']++;
         if ($def['effect'] === 'draw') $this->drawDi($state, $id, 1);
-        return 'buys ' . $def['name'];
+        $this->bga->playerStats->inc('tiles_bought', 1, (int) $id);
+        $this->event('buy', clienttranslate('${player_name} buys ${tile_name} for ${cost} PP'), [
+            'player_id' => $id, 'tile' => $tile, 'tile_name' => $def['name'], 'cost' => $def['level'], 'i18n' => ['tile_name'],
+        ]);
     }
 
-    public function doRecruit(array &$state, string $id, string $slot, string $zoneKey, int $units): string
+    public function doRecruit(array &$state, string $id, string $slot, string $zoneKey, int $units): void
     {
         $this->requireSlot($state, $id, $slot, 'recruit');
-        if (!isset($state['zones'][$zoneKey]) || $state['zones'][$zoneKey]['city'] !== $id || $units < 1) throw new UserException('Choose your city and at least one unit.');
+        if (!isset($state['zones'][$zoneKey]) || $state['zones'][$zoneKey]['city'] !== $id || $units < 1) throw new UserException(clienttranslate('Choose your city and at least one unit.'));
         $bonus = $this->tileBonus($state, $id, 'recruit');
         $number = min($units + $bonus, 5 - ($state['zones'][$zoneKey]['units'][$id] ?? 0), 12 - $this->unitCount($state, $id));
-        if ($number < $units) throw new UserException('Troop limit or supply exceeded.');
+        if ($number < $units) throw new UserException(clienttranslate('Troop limit or supply exceeded.'));
         $this->spend($state, $id, $units);
         $state['zones'][$zoneKey]['units'][$id] = ($state['zones'][$zoneKey]['units'][$id] ?? 0) + $number;
         $state['players'][$id]['slots'][] = $slot;
+        $this->bga->playerStats->inc('units_recruited', $number, (int) $id);
+        $this->event('recruit', clienttranslate('${player_name} recruits ${units} unit(s) in ${zone_name}'), [
+            'player_id' => $id, 'units' => $number, 'zone' => $zoneKey, 'zone_name' => $this->zoneArg($state, $zoneKey),
+        ]);
         $this->battleIfNeeded($state, $id, $zoneKey);
-        return "recruits $number unit(s)";
     }
 
-    public function doMove(array &$state, string $id, string $slot, string $from, string $to, int $units, bool $teleport, string $via): string
+    public function doMove(array &$state, string $id, string $slot, string $from, string $to, int $units, bool $teleport, string $via): void
     {
         $this->requireSlot($state, $id, $slot, 'move');
-        if (!isset($state['zones'][$from], $state['zones'][$to]) || $from === $to || $units < 1) throw new UserException('Choose a valid move.');
+        if (!isset($state['zones'][$from], $state['zones'][$to]) || $from === $to || $units < 1) throw new UserException(clienttranslate('Choose a valid move.'));
         $source = &$state['zones'][$from];
         $target = &$state['zones'][$to];
-        if (($source['units'][$id] ?? 0) < $units) throw new UserException('Those units are not in the source zone.');
-        if (($target['units'][$id] ?? 0) + $units > 5) throw new UserException('A troop cannot exceed five units.');
+        if (($source['units'][$id] ?? 0) < $units) throw new UserException(clienttranslate('Those units are not in the source zone.'));
+        if (($target['units'][$id] ?? 0) + $units > 5) throw new UserException(clienttranslate('A troop cannot exceed five units.'));
         $route = $via === '' ? [$to] : [$via, $to];
         $previous = $from;
         if ($teleport) {
-            if ($this->controller($source) !== $id || $source['pyramid'] === null || !isset($state['zones'][$route[0]]) || !$state['zones'][$route[0]]['obelisk']) throw new UserException('Teleport from a controlled pyramid to an obelisk.');
+            if ($this->controller($source) !== $id || $source['pyramid'] === null || !isset($state['zones'][$route[0]]) || !$state['zones'][$route[0]]['obelisk']) throw new UserException(clienttranslate('Teleport from a controlled pyramid to an obelisk.'));
             $this->spend($state, $id, 2);
             $previous = array_shift($route);
             if ($previous !== $to) {
-                foreach ($state['zones'][$previous]['units'] as $other => $count) if ((string) $other !== $id && $count > 0) throw new UserException('A battle stops movement at the obelisk.');
+                foreach ($state['zones'][$previous]['units'] as $other => $count) if ((string) $other !== $id && $count > 0) throw new UserException(clienttranslate('A battle stops movement at the obelisk.'));
             }
         } elseif (count($route) > 1 && $this->tileBonus($state, $id, 'move') < 1) {
-            throw new UserException('You need extra movement to cross two land routes.');
+            throw new UserException(clienttranslate('You need extra movement to cross two land routes.'));
         }
         $foreignDistricts = 0;
         foreach ($route as $index => $step) {
-            if (!isset($state['zones'][$step])) throw new UserException('The destination is unavailable.');
+            if (!isset($state['zones'][$step])) throw new UserException(clienttranslate('The destination is unavailable.'));
             $nextZone = $state['zones'][$step];
             $land = in_array($step, $state['zones'][$previous]['neighbors'], true);
             $harbor = !empty($state['zones'][$previous]['harbor']) && ($nextZone['harbor'] === 'trade' || ($nextZone['harbor'] === 'military' && $nextZone['harborOwner'] === $id));
-            if (!$land && !$harbor) throw new UserException('The route is not connected by land or a legal harbor.');
+            if (!$land && !$harbor) throw new UserException(clienttranslate('The route is not connected by land or a legal harbor.'));
             if ($nextZone['kind'] === 'district' && $nextZone['city'] !== $id) {
                 // Walls: the troop must start the Move action adjacent to that district, and may enter only one opponent district per move.
                 $foreignDistricts++;
-                if ($foreignDistricts > 1 || $teleport || $index !== 0 || !in_array($step, $state['zones'][$from]['neighbors'], true)) throw new UserException('Enter one opponent district per move, starting the move adjacent to its walls.');
+                if ($foreignDistricts > 1 || $teleport || $index !== 0 || !in_array($step, $state['zones'][$from]['neighbors'], true)) throw new UserException(clienttranslate('Enter one opponent district per move, starting the move adjacent to its walls.'));
             }
-            if ($index < count($route) - 1) foreach ($nextZone['units'] as $other => $count) if ((string) $other !== $id && $count > 0) throw new UserException('A battle stops movement.');
+            if ($index < count($route) - 1) foreach ($nextZone['units'] as $other => $count) if ((string) $other !== $id && $count > 0) throw new UserException(clienttranslate('A battle stops movement.'));
             $previous = $step;
         }
         $source['units'][$id] -= $units;
         if ($source['units'][$id] === 0) unset($source['units'][$id]);
         $target['units'][$id] = ($target['units'][$id] ?? 0) + $units;
+        unset($source, $target);
         $state['players'][$id]['slots'][] = $slot;
+        $this->event('move', $teleport
+            ? clienttranslate('${player_name} teleports ${units} unit(s) from ${from_name} to ${zone_name}')
+            : clienttranslate('${player_name} moves ${units} unit(s) from ${from_name} to ${zone_name}'), [
+            'player_id' => $id, 'units' => $units, 'from' => $from, 'zone' => $to, 'via' => $via,
+            'from_name' => $this->zoneArg($state, $from), 'zone_name' => $this->zoneArg($state, $to),
+        ]);
         $this->battleIfNeeded($state, $id, $to);
-        return "moves $units unit(s) to " . $target['name'];
     }
 
-    public function playDayCard(array &$state, string $id, string $card, string $zoneKey): string
+    public function playDayCard(array &$state, string $id, string $card, string $zoneKey): void
     {
-        if (!isset(PrototypeRules::DI[$card]) || PrototypeRules::DI[$card]['phase'] !== 'day') throw new UserException('Choose a Day Divine Intervention card.');
+        $di = PrototypeRules::di();
+        if (!isset($di[$card]) || $di[$card]['phase'] !== 'day') throw new UserException(clienttranslate('Choose a Day Divine Intervention card.'));
         $index = array_search($card, $state['players'][$id]['diHand'], true);
-        if ($index === false) throw new UserException('You do not have that card.');
+        if ($index === false) throw new UserException(clienttranslate('You do not have that card.'));
         if ($card === 'reinforce') {
-            if (!isset($state['zones'][$zoneKey]) || $state['zones'][$zoneKey]['city'] !== $id || $this->controller($state['zones'][$zoneKey]) !== $id || ($state['zones'][$zoneKey]['units'][$id] ?? 0) >= 5 || $this->unitCount($state, $id) >= 12) throw new UserException('Choose a free home district with room for a unit.');
+            if (!isset($state['zones'][$zoneKey]) || $state['zones'][$zoneKey]['city'] !== $id || $this->controller($state['zones'][$zoneKey]) !== $id || ($state['zones'][$zoneKey]['units'][$id] ?? 0) >= 5 || $this->unitCount($state, $id) >= 12) throw new UserException(clienttranslate('Choose a free home district with room for a unit.'));
             $state['zones'][$zoneKey]['units'][$id] = ($state['zones'][$zoneKey]['units'][$id] ?? 0) + 1;
-        } else $this->gain($state, $id, 2);
+        } else {
+            $this->gain($state, $id, 2);
+        }
         array_splice($state['players'][$id]['diHand'], $index, 1);
         $state['diDiscard'][] = $card;
-        return 'plays ' . PrototypeRules::DI[$card]['name'];
+        $this->event('dayCard', clienttranslate('${player_name} plays ${card_name}'), ['player_id' => $id, 'card' => $card, 'card_name' => $di[$card]['name'], 'zone' => $zoneKey, 'i18n' => ['card_name']]);
     }
 
     private function battleIfNeeded(array &$state, string $attacker, string $zoneKey): void
@@ -325,6 +401,10 @@ class CoreGame extends \Bga\GameFramework\Table
         foreach ($state['zones'][$zoneKey]['units'] as $defender => $units) {
             if ((string) $defender !== $attacker && $units > 0) {
                 $state['battle'] = ['zone' => $zoneKey, 'attacker' => $attacker, 'defender' => (string) $defender, 'choices' => [], 'winner' => null, 'loser' => null, 'step' => 'cards'];
+                foreach ([$attacker, (string) $defender] as $player) $this->bga->playerStats->inc('battles_fought', 1, (int) $player);
+                $this->event('battleStart', clienttranslate('${player_name} attacks ${player_name2} in ${zone_name}'), [
+                    'player_id' => $attacker, 'player_id2' => (string) $defender, 'zone' => $zoneKey, 'zone_name' => $this->zoneArg($state, $zoneKey),
+                ]);
                 break;
             }
         }
@@ -338,18 +418,19 @@ class CoreGame extends \Bga\GameFramework\Table
     public function battleChoice(array &$state, string $id, int $played, int $discarded, string $di): string
     {
         $battle = &$state['battle'];
-        if ($battle === null || $battle['step'] !== 'cards' || isset($battle['choices'][$id]) || !in_array($id, [$battle['attacker'], $battle['defender']], true)) throw new UserException('It is not your battle choice.');
+        if ($battle === null || $battle['step'] !== 'cards' || isset($battle['choices'][$id]) || !in_array($id, [$battle['attacker'], $battle['defender']], true)) throw new UserException(clienttranslate('It is not your battle choice.'));
         $hand = $state['players'][$id]['battleHand'];
-        if ($played === $discarded || !in_array($played, $hand, true) || !in_array($discarded, $hand, true)) throw new UserException('Choose two different battle cards from your hand.');
+        if ($played === $discarded || !in_array($played, $hand, true) || !in_array($discarded, $hand, true)) throw new UserException(clienttranslate('Choose two different battle cards from your hand.'));
         $cards = $di === '' ? [] : explode(',', $di);
         $available = array_count_values($state['players'][$id]['diHand']);
+        $defs = PrototypeRules::di();
         $cost = 0;
         foreach (array_count_values($cards) as $card => $count) {
             $card = (string) $card;
-            if (!isset(PrototypeRules::DI[$card]) || PrototypeRules::DI[$card]['phase'] !== 'battle' || ($available[$card] ?? 0) < $count) throw new UserException('Choose battle DI cards from your hand.');
-            $cost += PrototypeRules::DI[$card]['cost'] * $count;
+            if (!isset($defs[$card]) || $defs[$card]['phase'] !== 'battle' || ($available[$card] ?? 0) < $count) throw new UserException(clienttranslate('Choose battle DI cards from your hand.'));
+            $cost += $defs[$card]['cost'] * $count;
         }
-        if ($state['players'][$id]['pp'] < $cost) throw new UserException('Not enough prayer for those DI cards.');
+        if ($state['players'][$id]['pp'] < $cost) throw new UserException(clienttranslate('Not enough prayer for those DI cards.'));
         $battle['choices'][$id] = ['played' => $played, 'discarded' => $discarded, 'di' => $cards];
         if (count($battle['choices']) < 2) return '';
         unset($battle);
@@ -360,13 +441,15 @@ class CoreGame extends \Bga\GameFramework\Table
     {
         $battle = &$state['battle'];
         $zone = &$state['zones'][$battle['zone']];
+        $cardsDef = PrototypeRules::battleCards();
+        $diDef = PrototypeRules::di();
         $totals = [];
         foreach ([$battle['attacker'], $battle['defender']] as $id) {
             $choice = $battle['choices'][$id];
-            $card = PrototypeRules::BATTLE_CARDS[$choice['played']];
+            $card = $cardsDef[$choice['played']];
             $attacking = $id === $battle['attacker'];
             foreach ($choice['di'] as $di) {
-                $this->spend($state, $id, PrototypeRules::DI[$di]['cost']);
+                $this->spend($state, $id, $diDef[$di]['cost']);
                 $key = array_search($di, $state['players'][$id]['diHand'], true);
                 array_splice($state['players'][$id]['diHand'], $key, 1);
                 $state['diDiscard'][] = $di;
@@ -378,30 +461,51 @@ class CoreGame extends \Bga\GameFramework\Table
                 'pierce' => $card['pierce'] + ($di['wound'] ?? 0),
                 'shield' => $card['shield'] + $this->tileBonus($state, $id, 'shield') + ($di['wall'] ?? 0) * 2,
             ];
-            $state['players'][$id]['battleHand'] = array_values(array_diff($state['players'][$id]['battleHand'], [$choice['played'], $choice['discarded']]));
-            $state['players'][$id]['battleDiscard'][] = $choice['played'];
-            $state['players'][$id]['battleDiscard'][] = $choice['discarded'];
-            if (!$state['players'][$id]['battleHand']) {
-                $state['players'][$id]['battleHand'] = array_keys(PrototypeRules::BATTLE_CARDS);
-                $state['players'][$id]['battleDiscard'] = [];
+            $player = &$state['players'][$id];
+            $player['battleHand'] = array_values(array_diff($player['battleHand'], [$choice['played'], $choice['discarded']]));
+            $player['battleDiscard'][] = $choice['played'];
+            $player['battleDiscard'][] = $choice['discarded'];
+            $player['battlePlayed'][] = $choice['played'];
+            if (!$player['battleHand']) {
+                $player['battleHand'] = array_keys($cardsDef);
+                $player['battleDiscard'] = [];
+                $player['battlePlayed'] = [];
             }
+            unset($player);
         }
         $a = $battle['attacker'];
         $d = $battle['defender'];
         $battle['winner'] = $totals[$a]['strength'] > $totals[$d]['strength'] ? $a : $d;
         $battle['loser'] = $battle['winner'] === $a ? $d : $a;
+        $losses = [];
         foreach ([[$a, $d], [$d, $a]] as [$victim, $opponent]) {
-            $loss = $totals[$opponent]['pierce'] + max(0, $totals[$opponent]['damage'] - $totals[$victim]['shield']);
-            $zone['units'][$victim] = max(0, ($zone['units'][$victim] ?? 0) - $loss);
+            $loss = min($zone['units'][$victim] ?? 0, $totals[$opponent]['pierce'] + max(0, $totals[$opponent]['damage'] - $totals[$victim]['shield']));
+            $losses[$victim] = $loss;
+            $zone['units'][$victim] = ($zone['units'][$victim] ?? 0) - $loss;
             if ($zone['units'][$victim] === 0) unset($zone['units'][$victim]);
         }
+        $winner = $battle['winner'];
+        $loser = $battle['loser'];
+        $this->bga->playerStats->inc('battles_won', 1, (int) $winner);
+        $this->event('battleResolved', clienttranslate('${player_name} wins the battle in ${zone_name}: ${card_w} (strength ${strength_w}) against ${player_name2}\'s ${card_l} (strength ${strength_l})'), [
+            'player_id' => $winner, 'player_id2' => $loser, 'zone' => $battle['zone'], 'zone_name' => $this->zoneArg($state, $battle['zone']),
+            'card_w' => $cardsDef[$battle['choices'][$winner]['played']]['name'], 'card_l' => $cardsDef[$battle['choices'][$loser]['played']]['name'],
+            'strength_w' => $totals[$winner]['strength'], 'strength_l' => $totals[$loser]['strength'], 'i18n' => ['card_w', 'card_l'],
+        ]);
+        $this->event('log', clienttranslate('Casualties: ${player_name} loses ${loss} unit(s), ${player_name2} loses ${loss2} unit(s)'), [
+            'player_id' => $winner, 'player_id2' => $loser, 'loss' => $losses[$winner], 'loss2' => $losses[$loser],
+        ]);
         // Rewards: an attacker who wins and keeps a troop gains 1 Battle FP. A winning defender
         // gains 1 Veteran, and every player who gained no FP gains 1 Veteran (so 2 for a winning defender).
-        if ($battle['winner'] === $a && ($zone['units'][$a] ?? 0) > 0) $state['players'][$a]['permanent']++;
-        else $state['players'][$a]['veterans']++;
-        $state['players'][$d]['veterans'] += $battle['winner'] === $d ? 2 : 1;
+        if ($winner === $a && ($zone['units'][$a] ?? 0) > 0) {
+            $state['players'][$a]['permanent']++;
+            $this->bga->playerStats->inc('battle_fp', 1, (int) $a);
+            $this->event('log', clienttranslate('${player_name} gains 1 Battle FP'), ['player_id' => $a]);
+        } else {
+            $state['players'][$a]['veterans']++;
+        }
+        $state['players'][$d]['veterans'] += $winner === $d ? 2 : 1;
         $battle['totals'] = $totals;
-        $winner = $battle['winner'];
         unset($battle, $zone);
         $this->setAftermathStep($state, 'loser');
         return $winner;
@@ -448,27 +552,38 @@ class CoreGame extends \Bga\GameFramework\Table
     public function battleAftermath(array &$state, string $id, string $choice, string $retreatTo): bool
     {
         $battle = $state['battle'];
-        if ($battle === null || !in_array($battle['step'], ['loser', 'retreat', 'winner'], true)) throw new UserException('There is no battle aftermath.');
-        if ($id !== $this->aftermathActor($state)) throw new UserException('It is not your aftermath choice.');
+        if ($battle === null || !in_array($battle['step'], ['loser', 'retreat', 'winner'], true)) throw new UserException(clienttranslate('There is no battle aftermath.'));
+        if ($id !== $this->aftermathActor($state)) throw new UserException(clienttranslate('It is not your aftermath choice.'));
         $zoneKey = $battle['zone'];
         if ($battle['step'] === 'retreat') {
-            if ($choice !== 'retreat' || !in_array($retreatTo, $this->retreatOptions($state), true)) throw new UserException('Choose an adjacent free zone for the retreating troop.');
+            if ($choice !== 'retreat' || !in_array($retreatTo, $this->retreatOptions($state), true)) throw new UserException(clienttranslate('Choose an adjacent free zone for the retreating troop.'));
             $loser = $battle['loser'];
-            $state['zones'][$retreatTo]['units'][$loser] = ($state['zones'][$retreatTo]['units'][$loser] ?? 0) + $state['zones'][$zoneKey]['units'][$loser];
+            $units = $state['zones'][$zoneKey]['units'][$loser];
+            $state['zones'][$retreatTo]['units'][$loser] = ($state['zones'][$retreatTo]['units'][$loser] ?? 0) + $units;
             unset($state['zones'][$zoneKey]['units'][$loser]);
+            $this->event('move', clienttranslate('${player_name} sends ${player_name2}\'s troop retreating to ${zone_name}'), [
+                'player_id' => $id, 'player_id2' => $loser, 'mover' => $loser, 'units' => $units, 'from' => $zoneKey, 'zone' => $retreatTo,
+                'zone_name' => $this->zoneArg($state, $retreatTo),
+            ]);
             return $this->setAftermathStep($state, 'winner');
         }
         if ($choice === 'recall') {
             $units = $state['zones'][$zoneKey]['units'][$id] ?? 0;
-            $this->gain($state, $id, max(0, $units - 1));
+            $pp = $this->gain($state, $id, max(0, $units - 1));
             unset($state['zones'][$zoneKey]['units'][$id]);
+            $this->event('recall', clienttranslate('${player_name} recalls ${units} unit(s) from ${zone_name} and gains ${pp} PP'), [
+                'player_id' => $id, 'units' => $units, 'pp' => $pp, 'zone' => $zoneKey, 'zone_name' => $this->zoneArg($state, $zoneKey),
+            ]);
         } elseif ($choice === 'retreat' && $battle['step'] === 'loser') {
-            if (($state['zones'][$zoneKey]['units'][$battle['winner']] ?? 0) === 0) throw new UserException('The winner has no troop left, so you must recall.');
-            if (!$this->retreatOptions($state)) throw new UserException('No adjacent free zone is available, so you must recall.');
+            if (($state['zones'][$zoneKey]['units'][$battle['winner']] ?? 0) === 0) throw new UserException(clienttranslate('The winner has no troop left, so you must recall.'));
+            if (!$this->retreatOptions($state)) throw new UserException(clienttranslate('No adjacent free zone is available, so you must recall.'));
             $state['battle']['step'] = 'retreat';
+            $this->event('log', clienttranslate('${player_name} retreats; ${player_name2} chooses where'), ['player_id' => $id, 'player_id2' => $battle['winner']]);
             return false;
-        } elseif ($choice !== 'stay' || $battle['step'] !== 'winner') {
-            throw new UserException('Invalid aftermath choice.');
+        } elseif ($choice === 'stay' && $battle['step'] === 'winner') {
+            $this->event('log', clienttranslate('${player_name} keeps their troop in ${zone_name}'), ['player_id' => $id, 'zone_name' => $this->zoneArg($state, $zoneKey)]);
+        } else {
+            throw new UserException(clienttranslate('Invalid aftermath choice.'));
         }
         if ($battle['step'] === 'loser') return $this->setAftermathStep($state, 'winner');
         $state['battle'] = null;
@@ -477,17 +592,20 @@ class CoreGame extends \Bga\GameFramework\Table
 
     public function resolveNight(array &$state): void
     {
+        $this->event('log', clienttranslate('Night ${round}: offerings, temples and prayers are resolved'), ['round' => $state['round']]);
         foreach ($state['order'] as $id) {
             $choice = $state['night']['choices'][$id];
             if ($choice['offer'] && $this->controller($state['zones']['sanctuary']) === $id && ($state['zones']['sanctuary']['units'][$id] ?? 0) >= 2) {
                 $state['zones']['sanctuary']['units'][$id] -= 2;
                 if ($state['zones']['sanctuary']['units'][$id] === 0) unset($state['zones']['sanctuary']['units'][$id]);
                 $state['players'][$id]['permanent']++;
+                $this->event('log', clienttranslate('${player_name} sacrifices 2 units at the Sanctuary of All Gods and gains 1 Divine FP'), ['player_id' => $id]);
             }
             if ($choice['delta'] && $this->controller($state['zones']['delta']) === $id && ($state['zones']['delta']['units'][$id] ?? 0) >= 1) {
                 $state['zones']['delta']['units'][$id]--;
                 if ($state['zones']['delta']['units'][$id] === 0) unset($state['zones']['delta']['units'][$id]);
-                $this->gain($state, $id, 5);
+                $pp = $this->gain($state, $id, 5);
+                $this->event('log', clienttranslate('${player_name} sacrifices 1 unit at the Delta Temple and gains ${pp} PP'), ['player_id' => $id, 'pp' => $pp]);
             }
         }
         foreach ($state['order'] as $id) {
@@ -496,7 +614,10 @@ class CoreGame extends \Bga\GameFramework\Table
                 $temples++;
                 $this->gain($state, $id, $zone['prayer']);
             }
-            if ($temples >= 2) $state['players'][$id]['permanent']++;
+            if ($temples >= 2) {
+                $state['players'][$id]['permanent']++;
+                $this->event('log', clienttranslate('${player_name} controls ${temples} Temples and gains 1 Divine FP'), ['player_id' => $id, 'temples' => $temples]);
+            }
             $this->gain($state, $id, 2 + $this->tileBonus($state, $id, 'night'));
         }
         foreach ($state['order'] as $id) {
@@ -508,9 +629,12 @@ class CoreGame extends \Bga\GameFramework\Table
             $this->drawDi($state, $id, 1 + $draw);
             $recruit = min($choice['recruit'], $state['players'][$id]['veterans'], 12 - $this->unitCount($state, $id));
             $district = $choice['district'];
-            if (isset($state['zones'][$district]) && $state['zones'][$district]['city'] === $id && $this->controller($state['zones'][$district]) === $id) {
+            if ($recruit > 0 && isset($state['zones'][$district]) && $state['zones'][$district]['city'] === $id && $this->controller($state['zones'][$district]) === $id) {
                 $recruit = min($recruit, 5 - ($state['zones'][$district]['units'][$id] ?? 0));
                 $state['zones'][$district]['units'][$id] = ($state['zones'][$district]['units'][$id] ?? 0) + $recruit;
+                if ($recruit > 0) $this->event('recruit', clienttranslate('${player_name} recruits ${units} unit(s) in ${zone_name}'), [
+                    'player_id' => $id, 'units' => $recruit, 'zone' => $district, 'zone_name' => $this->zoneArg($state, $district),
+                ]);
             }
             $state['players'][$id]['veterans'] = 0;
             $state['players'][$id]['slots'] = [];
@@ -528,14 +652,18 @@ class CoreGame extends \Bga\GameFramework\Table
     public function chooseDestiny(array &$state, string $id, int $position): bool
     {
         $destiny = $state['destiny'] ?? null;
-        if ($destiny === null || $destiny['queue'][$destiny['index']] !== $id) throw new UserException('It is not your turn order choice.');
-        if (!array_key_exists($position, $destiny['positions']) || $destiny['positions'][$position] !== null) throw new UserException('Choose an empty turn order space.');
+        if ($destiny === null || $destiny['queue'][$destiny['index']] !== $id) throw new UserException(clienttranslate('It is not your turn order choice.'));
+        if (!array_key_exists($position, $destiny['positions']) || $destiny['positions'][$position] !== null) throw new UserException(clienttranslate('Choose an empty turn order space.'));
         $destiny['positions'][$position] = $id;
         $destiny['index']++;
+        $this->event('log', clienttranslate('${player_name} takes turn order space ${position}'), ['player_id' => $id, 'position' => $position + 1]);
         if ($destiny['index'] === count($destiny['queue']) - 1) {
             // The last player takes the only remaining space.
-            $destiny['positions'][array_search(null, $destiny['positions'], true)] = $destiny['queue'][$destiny['index']];
+            $last = $destiny['queue'][$destiny['index']];
+            $free = array_search(null, $destiny['positions'], true);
+            $destiny['positions'][$free] = $last;
             $destiny['index']++;
+            $this->event('log', clienttranslate('${player_name} takes turn order space ${position}'), ['player_id' => $last, 'position' => $free + 1]);
         }
         if ($destiny['index'] < count($destiny['queue'])) {
             $state['destiny'] = $destiny;
@@ -545,8 +673,11 @@ class CoreGame extends \Bga\GameFramework\Table
         $state['destiny'] = null;
         $state['round']++;
         $state['turnIndex'] = 0;
+        $this->bga->tableStats->inc('rounds', 1);
+        $this->event('log', clienttranslate('Day ${round} begins'), ['round' => $state['round']]);
         return true;
     }
+
     public function getGameProgression(): int
     {
         $state = $this->loadState();
@@ -554,5 +685,6 @@ class CoreGame extends \Bga\GameFramework\Table
         foreach (array_keys($state['players']) as $id) $best = max($best, $this->score($state, (string) $id));
         return min(99, (int) floor(100 * $best / 9));
     }
+
     public function upgradeTableDb($from_version): void {}
 }

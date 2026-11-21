@@ -16,7 +16,10 @@ class BattleAftermath extends GameState
 {
     public function __construct(protected Game $game)
     {
-        parent::__construct($game, id: 30, type: StateType::ACTIVE_PLAYER);
+        parent::__construct($game, id: 30, type: StateType::ACTIVE_PLAYER,
+            description: clienttranslate('${actplayer} must resolve the battle aftermath'),
+            descriptionMyTurn: clienttranslate('${you} must resolve the battle aftermath'),
+        );
     }
     public function onEnteringState(): void
     {
@@ -26,24 +29,19 @@ class BattleAftermath extends GameState
     public function getArgs(): array
     {
         $state = $this->game->loadState();
-        $retreat = $state['battle'] !== null && $state['battle']['step'] === 'retreat';
+        $battle = $state['battle'];
         return [
-            'kemet' => $this->game->viewState($state),
-            'retreatOptions' => $retreat ? $this->game->retreatOptions($state) : [],
+            'step' => $battle['step'] ?? '',
+            'retreatOptions' => ($battle['step'] ?? '') === 'retreat' ? $this->game->retreatOptions($state) : [],
+            'canRetreat' => ($battle['step'] ?? '') === 'loser' && ($state['zones'][$battle['zone']]['units'][$battle['winner']] ?? 0) > 0 && $this->game->retreatOptions($state),
         ];
     }
     #[PossibleAction]
     public function actAftermath(string $choice, string $retreatTo): string
     {
         $state = $this->game->loadState();
-        $id = (string) $this->game->getCurrentPlayerId();
-        $step = $state['battle']['step'] ?? '';
-        $done = $this->game->battleAftermath($state, $id, $choice, $retreatTo);
-        $name = $this->game->getPlayerNameById((int) $id);
-        $message = $step === 'retreat'
-            ? $name . ' retreats the losing troop to ' . $state['zones'][$retreatTo]['name'] . '.'
-            : $name . ' chooses to ' . $choice . '.';
-        return $this->advance($state, $done, $message);
+        $done = $this->game->battleAftermath($state, (string) $this->game->getCurrentPlayerId(), $choice, $retreatTo);
+        return $this->advance($state, $done);
     }
     public function zombie(int $playerId): string
     {
@@ -52,11 +50,11 @@ class BattleAftermath extends GameState
         $choice = $step === 'loser' ? 'recall' : ($step === 'retreat' ? 'retreat' : 'stay');
         $retreatTo = $step === 'retreat' ? $this->game->retreatOptions($state)[0] : '';
         $done = $this->game->battleAftermath($state, (string) $playerId, $choice, $retreatTo);
-        return $this->advance($state, $done, 'An aftermath choice is made automatically.');
+        return $this->advance($state, $done);
     }
-    private function advance(array $state, bool $done, string $message): string
+    private function advance(array $state, bool $done): string
     {
-        $this->game->notifyState($state, $message);
+        $this->game->notifyState($state);
         if ($done) return NextPlayer::class;
         $this->game->gamestate->changeActivePlayer((int) $this->game->aftermathActor($state));
         return BattleAftermath::class;

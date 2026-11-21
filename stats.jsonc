@@ -1,28 +1,44 @@
-{    
+{
     // Statistics for the table
-    "table": {},
-    
+    "table": {
+        "rounds": {
+            "id": 10,
+            "name": "Rounds played",
+            "type": "int"
+        }
+    },
+
     // Statistics for each player
     "player": {
-      /* 
-      EXAMPLE:
-
-      "turns_number": {
-        "id": 10,
-        "name": "Number of turns",
-        "type": "int"
-      },
-      "player_teststat1": {
-        "id": 11,
-        "name": "player test stat 1",
-        "type": "int"
-      },
-      "player_teststat2": {
-        "id": 12,
-        "name": "player test stat 2",
-        "type": "float"
-      }
-      */
-
+        "battles_fought": {
+            "id": 10,
+            "name": "Battles fought",
+            "type": "int"
+        },
+        "battles_won": {
+            "id": 11,
+            "name": "Battles won",
+            "type": "int"
+        },
+        "battle_fp": {
+            "id": 12,
+            "name": "Battle FP gained",
+            "type": "int"
+        },
+        "units_recruited": {
+            "id": 13,
+            "name": "Units recruited",
+            "type": "int"
+        },
+        "pyramid_levels": {
+            "id": 14,
+            "name": "Pyramid levels raised",
+            "type": "int"
+        },
+        "tiles_bought": {
+            "id": 15,
+            "name": "Power tiles bought",
+            "type": "int"
+        }
     }
 }

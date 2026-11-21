@@ -14,13 +14,13 @@ Board Game Arena adaptation of *Kemet: Blood and Sand* (Matagot, 2–5 players).
 
 - `modules/php/Game.php` is the table class. It only loads `PrototypeRules.php` and `CoreGame.php` and extends `CoreGame`.
 - `modules/php/CoreGame.php` holds setup, `getAllDatas`, `viewState` (per-viewer redaction), scoring and control, and all rule logic: actions (`doPray`, `doRaise`, `doBuy`, `doRecruit`, `doMove`, `playDayCard`), battle (`battleChoice`, `resolveBattle`, `battleAftermath`, `retreatOptions`), night (`resolveNight`) and Destiny (`chooseDestiny`).
-- `modules/php/PrototypeRules.php` holds the component catalogs (battle cards, DI cards, power tiles, action slots) and the board graph (city sites, shared zones, links, harbors, obelisks, player-count layouts). The catalogs are stand-ins, not the printed components.
+- `modules/php/PrototypeRules.php` holds the component catalogs as `clienttranslate()`-wrapped static methods (`battleCards()`, `di()`, `tiles()`, `colorNames()`, `actionNames()`, plus the `SLOTS` constant) and the board graph (city sites, shared zones, links, harbors, obelisks, player-count layouts). The catalogs are stand-ins, not the printed components.
 - `modules/php/States/` holds one class per state. There is no `states.inc.php` or `material.inc.php`.
 
 | ID | State | Type | Purpose |
 |----|-------|------|---------|
 | 10 | `PlayerTurn` | active | one action per turn, plus day DI cards; checks the 9-FP win at turn start |
-| 20 | `BattleChoice` | active (attacker, then defender) | secret War Council choice |
+| 20 | `BattleChoice` | multiple active (attacker and defender) | simultaneous secret War Council choice |
 | 30 | `BattleAftermath` | active | steps `loser` → `retreat` (winner picks zone) → `winner` |
 | 40 | `NightChoice` | active, in turn order | offerings and veteran spending; then `resolveNight` |
 | 50 | `Destiny` | active | turn-order choice, fewest FP first |
@@ -36,10 +36,10 @@ Board Game Arena adaptation of *Kemet: Blood and Sand* (Matagot, 2–5 players).
 
 - Declare actions with `#[PossibleAction]` on the state class. Validate the acting player and every input on the server, and throw `UserException` for illegal moves. Every active state needs a valid exit and a `zombie()` that makes a legal choice.
 - Hidden information: hands (`diHand`, `battleHand`) are sent only to their owner through `viewState($state, $viewer)` and `_private` state args. War Council choices stay masked until both players commit, and the facedown discard is never revealed. Any new private data must go through `viewState`.
-- Notifications currently go through one `kemetChanged` notification carrying the public view (`notifyState`). The client keeps its own hand from before, so private changes need a private notification or private args.
+- Notifications: rule methods queue translated log events with `CoreGame::event($type, clienttranslate(...), $args)`. Passing `player_id`/`player_id2` adds `player_name`/`player_name2`, and zones go in as `zoneArg()` nested log args. `notifyState()` saves the state, sends the queued events (the client animates `move`, `battleStart`, `recruit`, and so on), then a silent public `kemetState` sync and a private `hand` notification to each player. Every client handler must be a `notif_<type>` method.
 - `getAllDatas()` plus client `setup()` must rebuild the whole board after F5 without relying on earlier notifications.
 - Translation: wrap player-facing PHP strings in `clienttranslate(...)` and client strings in `_()`, using placeholders such as `${player_name}` rather than concatenation. Much existing text does not do this yet, so fix it when you touch it.
-- BGA UI/UX: prefer clickable, highlighted board elements and status-bar buttons (`this.bga.statusBar.addActionButton`) over forms, and use BGA player panels and the game log rather than custom copies. The current form-based panel is a known gap.
+- BGA UI/UX: players click highlighted (`.selectable`) map zones, action spaces, market tiles and cards, and confirm with status-bar buttons (`this.bga.statusBar.addActionButton`). Multi-step choices are local steps in `Game.js` (`this.sel`, built in `buildStep()`), with a Cancel button that returns to the start of the phase. The client mirrors some rules only to decide what to highlight; the server stays authoritative. Use BGA player panels, the BGA game log and `addTooltipHtml` rather than custom copies, and never add forms. Colorblind support is game preference 100, which adds the `kemet-symbols-on` CSS class.
 
 ## Verify and deploy
 
