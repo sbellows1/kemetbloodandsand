@@ -1,0 +1,61 @@
+# Agent instructions for Kemet: Blood and Sand (BGA)
+
+Board Game Arena adaptation of *Kemet: Blood and Sand* (Matagot, 2–5 players). It is a playable, server-validated prototype; `README.md` lists what is implemented and the known prototype boundaries.
+
+## Architecture and constraints
+
+- Target PHP 8.4 with `declare(strict_types=1);`. Use the modern `Bga\GameFramework` APIs: `Table`, `States\GameState` with class-return transitions, `#[PossibleAction]`, `StateType`, `UserException`, and `$this->bga->notify` / `$this->bga->playerScore`. Check signatures in `_ide_helper.php` (server) and `bga-framework.d.ts` (client) before using an unfamiliar API. Both are framework-provided; refresh them from Studio rather than editing them.
+- All game state is one JSON document in the `kemet_state` table (`dbmodel.sql`), read with `CoreGame::loadState()` and written with `saveState()`, which also updates player scores. Use BGA DB helpers (`DbQuery`, `getUniqueValueFromDB`, `escapeStringForDB`); never open raw `mysqli`/PDO connections. A schema change needs a new table in Studio, or a migration in `upgradeTableDb()` for live tables.
+- The client is a single ES module, `modules/js/Game.js`, hand-maintained JavaScript (no Dojo `declare`, no `bga-cards`/`bga-animations`). Styles are in `kemetbloodandsands.css`. Edit these files directly.
+- There is no working build. `package.json`/`rollup.config.mjs` point at `src/ts` and `src/scss`, but that template code was moved to `src-disabled/` and is stale. `npm run build` would overwrite `Game.js` and the CSS with the template; do not run it. Adopt TypeScript only as a deliberate, complete migration.
+- Never introduce `eval()`, direct `$_GET`/`$_POST` access, external CDNs or `localStorage`. Keep secrets and private keys out of Git.
+
+## Where things live
+
+- `modules/php/Game.php` is the table class. It only loads `PrototypeRules.php` and `CoreGame.php` and extends `CoreGame`.
+- `modules/php/CoreGame.php` holds setup, `getAllDatas`, `viewState` (per-viewer redaction), scoring and control, and all rule logic: actions (`doPray`, `doRaise`, `doBuy`, `doRecruit`, `doMove`, `playDayCard`), battle (`battleChoice`, `resolveBattle`, `battleAftermath`, `retreatOptions`), night (`resolveNight`) and Destiny (`chooseDestiny`).
+- `modules/php/PrototypeRules.php` holds the component catalogs (battle cards, DI cards, power tiles, action slots) and the board graph (city sites, shared zones, links, harbors, obelisks, player-count layouts). The catalogs are stand-ins, not the printed components.
+- `modules/php/States/` holds one class per state. There is no `states.inc.php` or `material.inc.php`.
+
+| ID | State | Type | Purpose |
+|----|-------|------|---------|
+| 10 | `PlayerTurn` | active | one action per turn, plus day DI cards; checks the 9-FP win at turn start |
+| 20 | `BattleChoice` | active (attacker, then defender) | secret War Council choice |
+| 30 | `BattleAftermath` | active | steps `loser` → `retreat` (winner picks zone) → `winner` |
+| 40 | `NightChoice` | active, in turn order | offerings and veteran spending; then `resolveNight` |
+| 50 | `Destiny` | active | turn-order choice, fewest FP first |
+| 90 | `NextPlayer` | game | advances the turn; after 5 actions each, starts Night |
+| 98 | `EndScore` | game | sets the tie-breaker and ends the game |
+
+## Rules source
+
+- The rulebook is `rules-reference.pdf` in the project root (gitignored, local only; online copy linked in `README.md`). Extract text with `pdftotext -layout rules-reference.pdf <out>` in Git Bash. Diagrams are image-only and the extraction misses them, including the individual-board action-space layout on page 3. Flag those as unverified instead of guessing.
+- When code departs from the rulebook on purpose, record it under "Prototype boundaries" in `README.md`.
+
+## State, data and interface rules
+
+- Declare actions with `#[PossibleAction]` on the state class. Validate the acting player and every input on the server, and throw `UserException` for illegal moves. Every active state needs a valid exit and a `zombie()` that makes a legal choice.
+- Hidden information: hands (`diHand`, `battleHand`) are sent only to their owner through `viewState($state, $viewer)` and `_private` state args. War Council choices stay masked until both players commit, and the facedown discard is never revealed. Any new private data must go through `viewState`.
+- Notifications currently go through one `kemetChanged` notification carrying the public view (`notifyState`). The client keeps its own hand from before, so private changes need a private notification or private args.
+- `getAllDatas()` plus client `setup()` must rebuild the whole board after F5 without relying on earlier notifications.
+- Translation: wrap player-facing PHP strings in `clienttranslate(...)` and client strings in `_()`, using placeholders such as `${player_name}` rather than concatenation. Much existing text does not do this yet, so fix it when you touch it.
+- BGA UI/UX: prefer clickable, highlighted board elements and status-bar buttons (`this.bga.statusBar.addActionButton`) over forms, and use BGA player panels and the game log rather than custom copies. The current form-based panel is a known gap.
+
+## Verify and deploy
+
+PHP is available through WSL. Run these from the project root in PowerShell:
+
+```powershell
+wsl php -l modules/php/CoreGame.php
+node --check modules/js/Game.js
+```
+
+Lint every modified PHP file. There is no test suite in the repo. For rule logic, a throwaway script that stubs `Bga\GameFramework\Table` and `UserException` and calls `CoreGame` methods directly works well; keep it outside the repo.
+
+Deployment is through the VS Code SFTP extension (`.vscode/sftp.json`, gitignored): files upload to BGA Studio on save. Do not commit that file or its credentials. After changing `dbmodel.sql` or state IDs, start a new Studio table.
+
+The user handles browser testing on Studio. Don't use browser automation or play a Studio table unless asked. For an HTTP 500 or a stalled state, get the error and state from Studio's logs and database tools, and redact logs before sharing.
+
+## Git
+
+Commit only when asked. Commit directly on `main` and push to `origin main` immediately after each commit; don't create feature branches.
