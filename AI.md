@@ -14,7 +14,7 @@ Board Game Arena adaptation of *Kemet: Blood and Sand* (Matagot, 2–5 players).
 
 - `modules/php/Game.php` is the table class. It only loads `PrototypeRules.php` and `CoreGame.php` and extends `CoreGame`.
 - `modules/php/CoreGame.php` holds setup, `getAllDatas`, `viewState` (per-viewer redaction), scoring and control, and all rule logic: actions (`doPray`, `doRaise`, `doBuy`, `doRecruit`, `doMove`, `playDayCard`), battle (`battleChoice`, `resolveBattle`, `battleAftermath`, `retreatOptions`), night (`resolveNight`) and Destiny (`chooseDestiny`).
-- `modules/php/PrototypeRules.php` holds the component catalogs as `clienttranslate()`-wrapped static methods (`battleCards()`, `di()`, `tiles()`, `colorNames()`, `actionNames()`, plus the `SLOTS` constant) and the board graph (city sites, shared zones, links, harbors, obelisks, player-count layouts). The catalogs are stand-ins, not the printed components.
+- `modules/php/PrototypeRules.php` holds the component catalogs as `clienttranslate()`-wrapped static methods (`battleCards()`, `di()`, `tiles()`, `colorNames()`, `actionNames()`, plus the `SLOTS` constant) and the board graph (city sites, shared zones, links, harbors, obelisks, player-count layouts). `tiles()` is the real 64-tile catalog: each tile has `art` (sprite index), `mods` (effects read by `CoreGame::tileBonus()` and the client's `tileBonus()`), `impl` (`full`/`partial`/`none`) and `copy`; `tilesInPlay()` applies the player-count rules. The battle and DI card catalogs are still stand-ins.
 - `modules/php/States/` holds one class per state. There is no `states.inc.php` or `material.inc.php`.
 
 | ID | State | Type | Purpose |
@@ -39,6 +39,7 @@ Board Game Arena adaptation of *Kemet: Blood and Sand* (Matagot, 2–5 players).
 - Notifications: rule methods queue translated log events with `CoreGame::event($type, clienttranslate(...), $args)`. Passing `player_id`/`player_id2` adds `player_name`/`player_name2`, and zones go in as `zoneArg()` nested log args. `notifyState()` saves the state, sends the queued events (the client animates `move`, `battleStart`, `recruit`, and so on), then a silent public `kemetState` sync and a private `hand` notification to each player. Every client handler must be a `notif_<type>` method.
 - `getAllDatas()` plus client `setup()` must rebuild the whole board after F5 without relying on earlier notifications.
 - Translation: wrap player-facing PHP strings in `clienttranslate(...)` and client strings in `_()`, using placeholders such as `${player_name}` rather than concatenation. Much existing text does not do this yet, so fix it when you touch it.
+- Art comes from the publisher's print PDFs in `img/` (gitignored, never deployed). `tools/build-art.py` builds the sprites (`img/player-boards.jpg`, `img/power-tiles.jpg`); action-space positions on the board art are `BOARD_SPACES`/`BUY_SPACES` in `Game.js`. The play area shows no text: names and explanations go in tooltips, and status-bar prompts carry the instructions.
 - BGA UI/UX: players click highlighted (`.selectable`) map zones, action spaces, market tiles and cards, and confirm with status-bar buttons (`this.bga.statusBar.addActionButton`). Multi-step choices are local steps in `Game.js` (`this.sel`, built in `buildStep()`), with a Cancel button that returns to the start of the phase. The client mirrors some rules only to decide what to highlight; the server stays authoritative. Use BGA player panels, the BGA game log and `addTooltipHtml` rather than custom copies, and never add forms. Colorblind support is game preference 100, which adds the `kemet-symbols-on` CSS class.
 
 ## Verify and deploy
@@ -52,7 +53,7 @@ node --check modules/js/Game.js
 
 Lint every modified PHP file. There is no test suite in the repo. For rule logic, a throwaway script that stubs `Bga\GameFramework\Table` and `UserException` and calls `CoreGame` methods directly works well; keep it outside the repo.
 
-Deployment is through the VS Code SFTP extension (`.vscode/sftp.json`, gitignored): files upload to BGA Studio on save. Do not commit that file or its credentials. After changing `dbmodel.sql` or state IDs, start a new Studio table.
+Every change must reach BGA Studio automatically. `tools/deploy-bga.sh` uploads over SFTP (key `~/.ssh/id_rsa_bga`; override with `BGA_SFTP_*` env vars): with no arguments it sends the whole deployable payload, with paths it sends only the deployable ones among them. The project hook in `.claude/settings.json` runs it after every Edit/Write. Files changed any other way (shell, generated images, `git checkout`) need `bash tools/deploy-bga.sh <files>` by hand. The VS Code SFTP extension (`.vscode/sftp.json`, gitignored) also uploads on save from the editor; never commit that file or its credentials. After changing `dbmodel.sql` or state IDs, start a new Studio table.
 
 The user handles browser testing on Studio. Don't use browser automation or play a Studio table unless asked. For an HTTP 500 or a stalled state, get the error and state from Studio's logs and database tools, and redact logs before sharing.
 

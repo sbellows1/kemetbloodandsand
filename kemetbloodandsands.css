@@ -1,46 +1,42 @@
-/* Kemet: Blood and Sand — BGA interface */
+/* Kemet: Blood and Sand - BGA interface. Everything is drawn on the board art; labels live in tooltips. */
 
-#kemet-root { --ruby:#b8322a; --sapphire:#2f6aa8; --diamond:#c9a227; --onyx:#2d2d35; --sand:#f6ecd6; --ink:#3e322b; --select:#ffd23f;
+#kemet-root { --ruby:#b8322a; --sapphire:#2f6aa8; --diamond:#c9a227; --onyx:#2d2d35; --ink:#3e322b; --select:#ffd23f;
     color:var(--ink); font-size:14px; line-height:1.4; }
 #kemet-root * { box-sizing:border-box; }
-#kemet-root h3 { font:700 15px Georgia,serif; margin:8px 0 6px; }
-#kemet-root h4 { font:700 13px Georgia,serif; margin:0 0 4px; }
+#kemet-root button { font:inherit; margin:0; }
 
-/* Info bar: round, phase, turn order, current battle */
-#kemet-info { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; padding:6px 10px; margin-bottom:8px; background:var(--sand); border:1px solid #cdb893; border-radius:8px; }
-.kemet-round strong { font-family:Georgia,serif; }
-.kemet-order { display:flex; flex-wrap:wrap; gap:6px; list-style:none; margin:0; padding:0; }
-.kemet-order li { padding:2px 6px; border-radius:12px; background:#fff8ec; }
-.kemet-order li.current { outline:2px solid var(--select); }
-.kemet-order li.empty { opacity:.6; font-style:italic; }
-.kemet-chip { font-weight:700; color:var(--player); text-shadow:0 0 1px #fff; }
-.kemet-battle-info { padding:2px 8px; border-radius:6px; background:#f3d5cf; }
-
-.kemet-layout { display:grid; grid-template-columns:minmax(0,3fr) minmax(260px,2fr); gap:10px; align-items:start; }
+.kemet-layout { display:grid; grid-template-columns:minmax(0,3fr) minmax(300px,2fr); gap:12px; align-items:start; }
 @media (max-width:900px) { .kemet-layout { grid-template-columns:1fr; } }
-.kemet-box { background:#fff9ed; border:1px solid #cdb893; border-radius:8px; padding:8px 10px; margin-bottom:10px; }
+#kemet-side { display:flex; flex-direction:column; gap:10px; }
 
-/* Board */
-#kemet-map-wrap { overflow:auto; border:2px solid #9b7650; border-radius:8px; background:#d3b583; }
+/* Game board */
+#kemet-map-wrap { overflow:auto; }
 #kemet-map { position:relative; width:100%; min-width:520px; aspect-ratio:1381 / 1700; background:url('img/prototype-board.jpg') center/100% 100% no-repeat; }
-.kemet-city-site { position:absolute; transform:translate(-50%,-50%); padding:1px 5px; border-radius:4px; background:#4e2f1de0; color:#fff9e9; font:bold 11px Georgia,serif; pointer-events:none; }
 .kemet-closed { position:absolute; transform:translate(-50%,-50%); width:34px; height:34px; border-radius:50%; background:#3c3c42b0; pointer-events:none; }
-.kemet-pin { position:absolute; z-index:2; transform:translate(-50%,-50%); width:34px; height:34px; padding:0; border:3px solid var(--owner); border-radius:50%;
-    background:#fff8dbee; color:#402b1b; box-shadow:0 1px 5px #1d120f99; display:grid; place-items:center; font:bold 11px Georgia,serif; cursor:default; }
-.kemet-pin.temple, .kemet-pin.sanctuary { border-radius:8px; }
-.kemet-pin.temple { background:#e4f0d9f2; }
-.kemet-pin.sanctuary { background:#ece3f4f2; }
-.kemet-pin.desert { background:#f6e7c4e8; }
-.kemet-pin.selectable { cursor:pointer; z-index:3; box-shadow:0 0 0 4px var(--select),0 0 12px 4px #ffd23fcc; animation:kemet-glow 1.4s ease-in-out infinite; }
+.kemet-pin { position:absolute; z-index:2; transform:translate(-50%,-50%); width:30px; height:30px; padding:0; border:3px solid var(--owner); border-radius:50%;
+    background:transparent; cursor:default; }
+.kemet-pin.empty:not(.selectable):not(.battle) { border-color:transparent; }
+.kemet-pin.selectable { cursor:pointer; z-index:3; box-shadow:0 0 0 3px var(--select),0 0 12px 4px #ffd23fcc; animation:kemet-glow 1.4s ease-in-out infinite; }
 .kemet-pin.selected { z-index:4; box-shadow:0 0 0 4px #b84029,0 2px 8px #1d120fa3; animation:none; }
 .kemet-pin.battle { box-shadow:0 0 0 4px #b84029; }
-@keyframes kemet-glow { 50% { box-shadow:0 0 0 4px var(--select),0 0 4px 1px #ffd23f66; } }
-.kemet-troop { position:absolute; bottom:-9px; right:-12px; min-width:18px; height:18px; padding:0 4px; border-radius:9px; background:var(--player); color:#fff;
-    border:1px solid #fff; font:700 11px/16px Arial,sans-serif; }
-.kemet-troop + .kemet-troop { right:auto; left:-12px; }
-.kemet-pyramid { position:absolute; top:-10px; left:-12px; min-width:18px; height:18px; padding:0 3px; border-radius:3px; color:#fff; font:700 11px/18px Arial,sans-serif; font-style:normal; }
-.kemet-pyramid.ruby { background:var(--ruby); } .kemet-pyramid.sapphire { background:var(--sapphire); }
-.kemet-pyramid.diamond { background:var(--diamond); color:#2b2100; } .kemet-pyramid.onyx { background:var(--onyx); }
+@keyframes kemet-glow { 50% { box-shadow:0 0 0 3px var(--select),0 0 4px 1px #ffd23f66; } }
+.kemet-troop { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); min-width:24px; height:24px; padding:0 4px; border-radius:50%; background:var(--player); color:#fff;
+    border:2px solid #fff; box-shadow:0 1px 4px #000a; font:700 12px/20px Arial,sans-serif; text-align:center; }
+.kemet-troop + .kemet-troop { left:auto; right:-18px; top:-6px; transform:none; }
+.kemet-pyramid { position:absolute; top:-15px; left:-15px; width:24px; height:21px; clip-path:polygon(50% 0,100% 100%,0 100%); background:var(--c);
+    color:#fff; font:700 11px/1 Arial,sans-serif; font-style:normal; display:flex; align-items:flex-end; justify-content:center; padding-bottom:2px; }
+.kemet-pyramid.ruby { --c:var(--ruby); } .kemet-pyramid.sapphire { --c:var(--sapphire); }
+.kemet-pyramid.diamond { --c:var(--diamond); color:#2b2100; } .kemet-pyramid.onyx { --c:var(--onyx); }
+
+/* Round marker: drawn on the board's top-centre sky */
+.kemet-round-marker { position:absolute; left:50%; top:1.2%; transform:translateX(-50%); display:flex; align-items:center; gap:4px; color:#fff6d6;
+    font:700 20px/1 Georgia,serif; text-shadow:0 1px 3px #000, 0 0 6px #000; }
+.kemet-round-marker b { font-size:22px; }
+.kemet-pips { display:flex; gap:3px; margin-left:4px; }
+.kemet-pips i { width:9px; height:9px; border-radius:50%; border:1px solid #fff6d6; box-shadow:0 0 3px #000; }
+.kemet-pips i.done { background:#fff6d6; }
+.kemet-pips i.now { background:var(--select); }
+
 .kemet-flash { animation:kemet-flash .6s ease-out; }
 .kemet-flash-battle { animation:kemet-battle .6s ease-out; }
 @keyframes kemet-flash { 0% { transform:translate(-50%,-50%) scale(1.5); } 100% { transform:translate(-50%,-50%) scale(1); } }
@@ -49,50 +45,66 @@
     display:grid; place-items:center; font:700 12px Arial,sans-serif; transition:left .6s ease-in-out, top .6s ease-in-out; pointer-events:none; }
 
 /* Colorblind preference: shape symbols for pyramid/tile colors and player initials on troops */
-#kemet-root .kemet-sym { display:none; margin-right:2px; }
-.kemet-symbols-on #kemet-root .kemet-sym { display:inline; }
-.kemet-symbols-on .kemet-mini-tile .kemet-sym { display:inline; }
+#kemet-root .kemet-sym { display:none; }
+.kemet-symbols-on #kemet-root .kemet-sym, .kemet-symbols-on .kemet-mini-tile .kemet-sym { display:inline; }
 .kemet-symbols-on .kemet-troop::before { content:attr(data-initial) ' '; }
 .kemet-mini-tile .kemet-sym { display:none; }
 
-/* Your action board and hand */
-.kemet-board { display:flex; flex-direction:column; align-items:center; gap:4px; }
-.kemet-tier { display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:4px; }
-.kemet-tier-label { width:18px; font:700 12px Georgia,serif; color:#8a7560; }
-.kemet-slot { min-width:64px; min-height:34px; padding:3px 6px; border:2px solid #b69a6c; border-radius:6px; background:#fbf3e2; color:var(--ink); font-size:12px; cursor:default; }
-.kemet-slot.buy { border-left-width:6px; }
-.kemet-slot.buy.ruby { border-left-color:var(--ruby); } .kemet-slot.buy.sapphire { border-left-color:var(--sapphire); }
-.kemet-slot.buy.diamond { border-left-color:var(--diamond); } .kemet-slot.buy.onyx { border-left-color:var(--onyx); }
-.kemet-slot.used { background:var(--player); color:#fff; border-color:var(--player); opacity:.85; }
-.kemet-hand { display:flex; flex-wrap:wrap; gap:5px; }
-.kemet-card { display:flex; flex-direction:column; justify-content:space-between; width:76px; min-height:58px; padding:4px; border:2px solid #9d8562; border-radius:6px; background:#fffaf0; color:var(--ink); font-size:11px; text-align:left; cursor:default; }
-.kemet-card strong { font-size:11px; }
-.kemet-card.di { background:#eef0fb; border-color:#7b7fae; }
-.kemet-card.di.day { background:#fdf5d8; border-color:#b49a3a; }
-.kemet-card-stats { display:flex; flex-wrap:wrap; gap:3px; font-weight:700; }
-.kemet-slot.selectable, .kemet-card.selectable, .kemet-tile.selectable { cursor:pointer; box-shadow:0 0 0 3px var(--select); }
-.kemet-slot.selectable:hover, .kemet-card.selectable:hover, .kemet-tile.selectable:hover { transform:translateY(-2px); }
+/* Individual boards (img/player-boards.jpg: 5 divinities stacked, 720 x 516 each) */
+.kemet-pboard { position:relative; width:100%; aspect-ratio:720 / 516; background:url('img/player-boards.jpg') 0 0/100% 500% no-repeat; }
+.kemet-pboard.art-1 { background-position:0 25%; } .kemet-pboard.art-2 { background-position:0 50%; }
+.kemet-pboard.art-3 { background-position:0 75%; } .kemet-pboard.art-4 { background-position:0 100%; }
+.kemet-others { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:8px; }
+.kemet-space { position:absolute; transform:translate(-50%,-50%); width:9.8%; height:11.9%; padding:0; border:0; background:transparent; cursor:default; display:grid; place-items:center; }
+.kemet-space.buy { width:8.7%; height:11.2%; }
+.kemet-space.selectable { cursor:pointer; box-shadow:0 0 0 3px var(--select),0 0 10px 3px #ffd23fcc; animation:kemet-space-glow 1.4s ease-in-out infinite; }
+.kemet-space.selected { box-shadow:0 0 0 3px #b84029; animation:none; }
+@keyframes kemet-space-glow { 50% { box-shadow:0 0 0 3px var(--select),0 0 3px 1px #ffd23f66; } }
+.kemet-action-token { display:block; width:62%; aspect-ratio:1; border-radius:50%; background:radial-gradient(circle at 35% 30%, #fff8 0, transparent 45%), var(--player);
+    border:2px solid #fff; box-shadow:0 2px 4px #000b; }
+.kemet-space .kemet-action-token { position:absolute; }
+.kemet-buy-token { width:78%; height:78%; display:grid; place-items:center; color:#fff; font:700 12px Arial,sans-serif; border:2px solid #f4e3b0; box-shadow:inset 0 0 6px #0008; }
+.kemet-buy-token.ruby { background:var(--ruby); } .kemet-buy-token.sapphire { background:var(--sapphire); }
+.kemet-buy-token.diamond { background:var(--diamond); } .kemet-buy-token.onyx { background:var(--onyx); }
+.kemet-pp-marker { position:absolute; left:9.5%; top:6.5%; display:flex; align-items:center; gap:2px; color:#fff6d6; font:700 18px/1 Georgia,serif; text-shadow:0 1px 3px #000, 0 0 6px #000; }
+.kemet-reserve { position:absolute; left:3%; bottom:4%; display:flex; gap:3px; width:30%; }
+.kemet-reserve .kemet-action-token { width:13%; }
+.kemet-pboard:not(.mine) .kemet-pp-marker { font-size:13px; }
+
+/* Hand: battle and Divine Intervention cards, icon-only (names in tooltips) */
+.kemet-hand { display:flex; flex-wrap:wrap; gap:5px; min-height:0; }
+.kemet-card { position:relative; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; width:50px; height:70px; padding:3px;
+    border:2px solid #9d8562; border-radius:5px; background:linear-gradient(#f9ecd0,#e3c992); color:var(--ink); font:700 12px/1.1 Arial,sans-serif; cursor:default; }
+.kemet-card.di { background:linear-gradient(#e9d6a6,#c49a52); border-color:#7d5a26; }
+.kemet-card-icon { font-size:22px; }
+.kemet-card-cost { font-size:11px; }
+.kemet-card-stats { display:flex; flex-direction:column; align-items:center; gap:1px; }
+.kemet-card.selectable, .kemet-tile.selectable { cursor:pointer; box-shadow:0 0 0 3px var(--select); }
+.kemet-card.selectable:hover, .kemet-tile.selectable:hover { transform:translateY(-2px); }
 .kemet-card.selected { box-shadow:0 0 0 3px #2f8f4e; }
 .kemet-card.discarded { box-shadow:0 0 0 3px #888; opacity:.6; }
-.kemet-empty { color:#8a7560; font-style:italic; font-size:12px; }
 
-/* Power tiles */
-.kemet-tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:6px; }
-.kemet-tile-group { display:flex; flex-direction:column; gap:3px; }
-.kemet-tile { display:flex; align-items:center; gap:5px; padding:3px 5px; border:1px solid #c7b38f; border-left:6px solid; border-radius:4px; background:#fffaf0; color:var(--ink); font-size:11px; text-align:left; cursor:default; }
-.kemet-tile.ruby { border-left-color:var(--ruby); } .kemet-tile.sapphire { border-left-color:var(--sapphire); }
-.kemet-tile.diamond { border-left-color:var(--diamond); } .kemet-tile.onyx { border-left-color:var(--onyx); }
-.kemet-tile-level { font:700 12px Georgia,serif; }
+/* Power tiles (img/power-tiles.jpg: 8 x 8 grid, 195 x 172 each): one row per color, ascending level */
+.kemet-tile, .kemet-mini-tile, .kemet-tile-art { background-image:url('img/power-tiles.jpg'); background-size:800% 800%; background-repeat:no-repeat; }
+.kemet-market { display:flex; flex-direction:column; gap:6px; margin-top:12px; }
+.kemet-tile-row { display:flex; flex-wrap:wrap; gap:4px; }
+.kemet-tile { position:relative; width:62px; aspect-ratio:195 / 172; padding:0; border:0; border-radius:4px; cursor:default; box-shadow:0 1px 3px #0008; }
+.kemet-tile .kemet-sym { position:absolute; right:2px; bottom:0; font-size:12px; text-shadow:0 0 2px #fff; }
+.kemet-tile.gone { opacity:.2; filter:grayscale(1); box-shadow:none; }
+.kemet-tile-tip { display:flex; gap:8px; align-items:flex-start; max-width:360px; }
+.kemet-tile-art { flex:none; width:130px; aspect-ratio:195 / 172; border-radius:4px; }
 .kemet-sym.ruby { color:var(--ruby); } .kemet-sym.sapphire { color:var(--sapphire); } .kemet-sym.diamond { color:var(--diamond); } .kemet-sym.onyx { color:var(--onyx); }
 
 /* BGA player panels */
 .kemet-panel { display:grid; grid-template-columns:44px 1fr; gap:4px 6px; margin-top:4px; font-size:12px; }
-.kemet-portrait { grid-row:span 2; width:44px; height:44px; border-radius:4px; background:url('img/prototype-players.jpg') 0 0/500% 100%; }
+.kemet-portrait { position:relative; grid-row:span 2; width:44px; height:44px; background:url('img/prototype-players.jpg') 0 0/500% 100%; }
 .kemet-portrait.art-1 { background-position:25% 0; } .kemet-portrait.art-2 { background-position:50% 0; }
 .kemet-portrait.art-3 { background-position:75% 0; } .kemet-portrait.art-4 { background-position:100% 0; }
+.kemet-order-pos { position:absolute; right:-4px; bottom:-4px; width:18px; height:18px; border-radius:50%; background:#2b2118; color:#fff6d6; border:1px solid #fff6d6;
+    font:700 11px/16px Georgia,serif; text-align:center; }
+.kemet-order-pos.current { background:var(--select); color:#2b2118; }
 .kemet-stats { display:flex; flex-wrap:wrap; gap:2px 8px; }
 .kemet-stat { white-space:nowrap; }
 .kemet-mini-tiles { display:flex; flex-wrap:wrap; gap:2px; }
-.kemet-mini-tile { min-width:18px; height:16px; padding:0 3px; border-radius:3px; color:#fff; font:700 10px/16px Arial,sans-serif; text-align:center; }
-.kemet-mini-tile.ruby { background:#b8322a; } .kemet-mini-tile.sapphire { background:#2f6aa8; }
-.kemet-mini-tile.diamond { background:#c9a227; color:#2b2100; } .kemet-mini-tile.onyx { background:#2d2d35; }
+.kemet-mini-tile { position:relative; width:30px; aspect-ratio:195 / 172; border-radius:2px; font:700 9px/1 Arial,sans-serif; }
+.kemet-mini-tile .kemet-sym { position:absolute; right:1px; bottom:0; text-shadow:0 0 2px #fff; }
