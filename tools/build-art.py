@@ -2,7 +2,7 @@
 
 Requires Pillow and PyMuPDF:  python -m pip install --user pillow pymupdf
 Run from the repo root:       python tools/build-art.py
-Then deploy:                  bash tools/deploy-bga.sh img/player-boards.jpg img/power-tiles.jpg img/di-cards.jpg img/acquire-tokens.jpg img/silver-token.png img/battle-sample.jpg
+Then deploy:                  bash tools/deploy-bga.sh img/player-boards.jpg img/power-tiles.jpg img/di-cards.jpg img/acquire-tokens.png img/silver-token.png img/battle-sample.jpg
 
 Outputs
   img/player-boards.jpg  5 Individual boards (Player Board Front), 720 x 516 each, stacked vertically
@@ -10,7 +10,8 @@ Outputs
   img/power-tiles.jpg    the 64 Power tiles (Punchboard Front pages 1-3), 8 x 8 grid of 195 x 172,
                          numbered row by row in punchboard order (page, row, column).
   img/di-cards.jpg       printed DI cards visible in the Player Aid, five cards in one row.
-  img/acquire-tokens.jpg printed Acquire tokens from Punchboard Front page 4, four colors in one row.
+  img/acquire-tokens.png printed Acquire emblems from Punchboard Front page 4, four colors in one row;
+                         the white token fields are transparent so they sit on the Individual board.
   img/silver-token.png   silver Action token illustration from the rulebook.
   img/battle-sample.jpg  battle card illustration shown in the rulebook (shared prototype art).
 """
@@ -18,7 +19,7 @@ import io
 import re
 
 import pymupdf
-from PIL import Image, ImageChops, ImageDraw
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 BOARD_W, BOARD_H = 720, 516
 TILE_W, TILE_H = 195, 172
@@ -113,11 +114,19 @@ def build_cards_and_tokens():
     # Ruby, Sapphire, Diamond, Onyx: one printed token of each color.
     acquire_rects = [(694, 801, 763, 870), (694, 657, 763, 726),
                      (613, 369, 682, 439), (613, 513, 682, 582)]
-    acquire = Image.new("RGB", (96 * len(acquire_rects), 96), "#ddc98c")
+    acquire = Image.new("RGBA", (96 * len(acquire_rects), 96))
     for i, rect in enumerate(acquire_rects):
-        acquire.paste(pdf_crop(punch, rect, (96, 96)), (96 * i, 0))
-    acquire.save("img/acquire-tokens.jpg", quality=88, optimize=True, progressive=True)
-    print("img/acquire-tokens.jpg", acquire.size)
+        emblem = pdf_crop(punch, rect, (96, 96)).convert("RGBA")
+        # Only the printed diamond and horizontal rule; the token's white field
+        # and gold square are redundant on the printed Individual board.
+        mask = Image.new("L", (96, 96), 0)
+        draw = ImageDraw.Draw(mask)
+        draw.polygon([(48, 31), (65, 46), (48, 64), (31, 46)], fill=255)
+        draw.rectangle((22, 43, 74, 49), fill=255)
+        emblem.putalpha(mask.filter(ImageFilter.GaussianBlur(0.6)))
+        acquire.alpha_composite(emblem, (96 * i, 0))
+    acquire.save("img/acquire-tokens.png", optimize=True)
+    print("img/acquire-tokens.png", acquire.size)
 
     rules = pymupdf.open("img/kemet rulebook v DEF EN.pdf")
     silver = pdf_crop(rules[4], (262, 124, 284, 146), (128, 128)).convert("RGBA")

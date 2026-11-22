@@ -77,13 +77,13 @@
 .kemet-pboard.art-3 { background-position:0 75%; } .kemet-pboard.art-4 { background-position:0 100%; }
 .kemet-others { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:8px; }
 .kemet-space { position:absolute; transform:translate(-50%,-50%); width:9.8%; height:11.9%; min-width:40px; min-height:40px; padding:0; border:0; background:transparent; cursor:default; display:grid; place-items:center; }
-.kemet-space.buy { width:8.7%; height:11.2%; }
+.kemet-space.buy { width:9%; height:11.9%; }
 .kemet-space.selectable { cursor:pointer; box-shadow:0 0 0 3px var(--select),0 0 8px 2px #ffd23fcc; }
 .kemet-space.selected { box-shadow:0 0 0 3px #b84029; }
 .kemet-action-token { display:block; width:62%; aspect-ratio:1; border-radius:50%; background:radial-gradient(circle at 35% 30%, #fff8 0, transparent 45%), var(--player);
     border:2px solid #fff; box-shadow:0 2px 4px #000b; }
 .kemet-space .kemet-action-token { position:absolute; }
-.kemet-buy-token { position:relative; width:78%; height:78%; display:grid; place-items:center; background-image:url('img/acquire-tokens.jpg'); background-size:400% 100%; background-repeat:no-repeat; box-shadow:0 1px 3px #0008; }
+.kemet-buy-token { position:relative; width:100%; height:100%; display:grid; place-items:center; background-image:url('img/acquire-tokens.png'); background-size:400% 100%; background-repeat:no-repeat; }
 .kemet-buy-token.ruby { background-position:0 0; } .kemet-buy-token.sapphire { background-position:33.333% 0; }
 .kemet-buy-token.diamond { background-position:66.667% 0; } .kemet-buy-token.onyx { background-position:100% 0; }
 .kemet-buy-token .kemet-sym { position:absolute; right:-3px; bottom:-3px; padding:0 2px; border-radius:3px; background:#222; color:#fff; font:700 10px/14px Arial,sans-serif; }
