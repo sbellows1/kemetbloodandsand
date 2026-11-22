@@ -27,6 +27,9 @@ const BUY_SPACES = [[81.67, 75.81], [72, 75.81], [62.33, 75.81], [52.67, 75.81]]
 const GOLD_SPACE = [73.7, 28];
 // Golden Action ids (PrototypeRules::tiles 'golden') -> the actions they allow.
 const GOLDEN_ACTIONS = { move_recruit: ['move', 'recruit'], acquire: ['buy'], move_noteleport: ['move'], move_surprise: ['move'] };
+// Player Aid card faces in img/di-cards.jpg. Reinforcement remains a prototype
+// card: the printed Tactical Support face describes a different unit count.
+const DI_ART = { blessing: 0, fury: 1, wall: 2, wound: 3, diversion: 4 };
 
 export class Game {
     constructor(bga) {
@@ -893,7 +896,8 @@ export class Game {
             `<button type="button" id="kemet-creature-${t}" class="kemet-creature-tile${at ? ' placed' : ''}${this.cls('creature', t)}" data-creature="${t}" style="${this.tileArt(t)}" aria-label="${this.esc(_(this.defs.tiles[t].name))}"></button>`).join('');
         const di = this.hand.diHand.map((c, i) => {
             const d = this.defs.diCards[c];
-            return `<button type="button" id="kemet-di-card-${i}" class="kemet-card di ${d.phase}${this.cls('di', i)}" data-di="${i}" aria-label="${this.esc(_(d.name))}">
+            const art = DI_ART[c];
+            return `<button type="button" id="kemet-di-card-${i}" class="kemet-card di ${d.phase}${art === undefined ? '' : ' illustrated'}${this.cls('di', i)}" data-di="${i}" ${art === undefined ? '' : `style="background-position:${art * 25}% 0"`} aria-label="${this.esc(_(d.name))}">
                 <span class="kemet-card-icon">${d.phase === 'day' ? '☀' : '⚔'}</span>${d.cost ? `<span class="kemet-card-cost">☥${d.cost}</span>` : ''}</button>`;
         }).join('');
         const powers = (this.me_()?.tiles || []).filter(t => this.defs.tiles[t].golden).map(t =>
