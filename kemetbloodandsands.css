@@ -11,7 +11,7 @@
 
 /* Game board */
 #kemet-map-wrap { overflow:auto; padding:12px; touch-action:pan-x pan-y; }
-#kemet-map { position:relative; width:100%; min-width:520px; aspect-ratio:1381 / 1700; background:url('img/prototype-board.jpg') center/100% 100% no-repeat; }
+#kemet-map { position:relative; width:100%; min-width:520px; aspect-ratio:1381 / 1700; background:url('img/prototype-board.jpg') center/100% 100.25% no-repeat; }
 .kemet-closed { position:absolute; transform:translate(-50%,-50%); width:34px; height:34px; border-radius:50%; background:#3c3c42b0; pointer-events:none; }
 .kemet-pin { position:absolute; z-index:2; transform:translate(-50%,-50%); width:40px; height:40px; padding:0; border:3px solid var(--owner); border-radius:50%;
     background:transparent; cursor:default; }
