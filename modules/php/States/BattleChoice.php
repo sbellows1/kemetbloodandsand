@@ -8,7 +8,10 @@ use Bga\GameFramework\States\GameState;
 use Bga\GameFramework\States\PossibleAction;
 use Bga\Games\kemetbloodandsands\Game;
 
-/** War Council: attacker and defender choose their battle cards simultaneously and secretly. */
+/**
+ * War Council: attacker and defender choose their battle cards simultaneously and secretly.
+ * With Spy, the Spy owner's opponent chooses first and the Spy owner sees their Battle card before choosing.
+ */
 class BattleChoice extends GameState
 {
     public function __construct(protected Game $game)
@@ -18,32 +21,52 @@ class BattleChoice extends GameState
             descriptionMyTurn: clienttranslate('War Council: ${you} must choose your battle cards'),
         );
     }
+
     public function onEnteringState(): void
     {
-        $battle = $this->game->loadState()['battle'];
-        $this->game->gamestate->setPlayersMultiactive([(int) $battle['attacker'], (int) $battle['defender']], BattleAftermath::class, true);
+        $choosers = array_map('intval', $this->game->battleChoosers($this->game->loadState()));
+        $this->game->gamestate->setPlayersMultiactive($choosers, BattleAftermath::class, true);
     }
+
     public function getArgs(): array
     {
         return [];
     }
+
     #[PossibleAction]
     public function actBattleChoice(int $played, int $discarded, string $di): void
     {
         $this->choose((int) $this->game->getCurrentPlayerId(), $played, $discarded, $di);
     }
+
     public function zombie(int $playerId): void
     {
         $hand = $this->game->loadState()['players'][(string) $playerId]['battleHand'];
         $this->choose($playerId, $hand[0], $hand[1], '');
     }
+
     private function choose(int $playerId, int $played, int $discarded, string $di): void
     {
         $state = $this->game->loadState();
-        $winner = $this->game->battleChoice($state, (string) $playerId, $played, $discarded, $di);
-        if ($winner === '') $this->game->event('log', clienttranslate('${player_name} has chosen battle cards'), ['player_id' => $playerId]);
+        $result = $this->game->battleChoice($state, (string) $playerId, $played, $discarded, $di);
+        if ($result === '') {
+            $this->game->event('log', clienttranslate('${player_name} has chosen battle cards'), ['player_id' => $playerId]);
+            $this->game->notifyState($state);
+            // A Spy owner waiting for this choice becomes active now.
+            $waiting = array_map('intval', $this->game->battleChoosers($state));
+            if ($waiting) $this->game->gamestate->setPlayersMultiactive($waiting, BattleAftermath::class, false);
+            $this->game->gamestate->setPlayerNonMultiactive($playerId, BattleAftermath::class);
+            return;
+        }
         $this->game->notifyState($state);
-        // Both troops can be wiped out, leaving no aftermath choice.
-        $this->game->gamestate->setPlayerNonMultiactive($playerId, $state['battle'] === null ? NextPlayer::class : BattleAftermath::class);
+        if ($result === 'wound') {
+            $next = BattleWound::class;
+        } elseif ($state['battle'] === null) {
+            // Both troops can be wiped out, leaving no aftermath choice.
+            $next = $this->game->afterAction($state);
+        } else {
+            $next = BattleAftermath::class;
+        }
+        $this->game->gamestate->setPlayerNonMultiactive($playerId, $next);
     }
 }

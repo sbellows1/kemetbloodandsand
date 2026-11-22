@@ -4,7 +4,10 @@ declare(strict_types=1);
 namespace Bga\Games\kemetbloodandsands;
 
 use Bga\GameFramework\UserException;
+use Bga\Games\kemetbloodandsands\States\BattleChoice;
+use Bga\Games\kemetbloodandsands\States\NextPlayer;
 use Bga\Games\kemetbloodandsands\States\PlayerTurn;
+use Bga\Games\kemetbloodandsands\States\StarterTile;
 
 class CoreGame extends \Bga\GameFramework\Table
 {
@@ -45,7 +48,11 @@ class CoreGame extends \Bga\GameFramework\Table
         $order = array_map('strval', array_keys($players));
         shuffle($order);
         $count = count($order);
-        $activeColors = array_slice(PrototypeRules::COLORS, 0, $count === 2 ? 2 : ($count === 5 ? 4 : 3));
+        // Setup 2.1 step 2: randomly select the Power tile colors for the player count, kept in catalog order.
+        $picked = PrototypeRules::COLORS;
+        shuffle($picked);
+        $picked = array_slice($picked, 0, $count === 2 ? 2 : ($count === 5 ? 4 : 3));
+        $activeColors = array_values(array_intersect(PrototypeRules::COLORS, $picked));
         $zones = PrototypeRules::board($order);
         $playerState = [];
         foreach ($order as $index => $id) {
@@ -56,7 +63,10 @@ class CoreGame extends \Bga\GameFramework\Table
             $playerState[$id] = [
                 'pp' => 7, 'permanent' => 0, 'veterans' => 0, 'extraUnits' => 0,
                 'slots' => [], 'bought' => [], 'tiles' => [],
-                'battleHand' => array_keys(PrototypeRules::battleCards()),
+                // Each player owns 1 gold Action token (rulebook v DEF); silver tokens come from Act of God tiles.
+                'silverSlots' => [], 'goldUsed' => false, 'creatures' => [],
+                'battleDeck' => PrototypeRules::BASE_BATTLE_CARDS,
+                'battleHand' => PrototypeRules::BASE_BATTLE_CARDS,
                 'battleDiscard' => [], 'battlePlayed' => [], 'diHand' => ['diversion'],
             ];
         }
@@ -69,24 +79,93 @@ class CoreGame extends \Bga\GameFramework\Table
             'round' => 1, 'order' => $order, 'turnIndex' => 0, 'colors' => $activeColors,
             'zones' => $zones, 'players' => $playerState,
             'market' => array_fill_keys(PrototypeRules::tilesInPlay($activeColors, $count), true),
-            'diDeck' => $deck, 'diDiscard' => [], 'battle' => null, 'night' => null, 'destiny' => null,
+            'diDeck' => $deck, 'diDiscard' => [], 'battle' => null, 'night' => null, 'destiny' => null, 'nightPowers' => null, 'turn' => null,
+            // Setup 2.3 step 4: in reverse turn order, each player chooses a Level 1 Power tile of one of their Pyramid colors.
+            'starter' => ['queue' => array_reverse($order), 'index' => 0],
         ];
         foreach ($order as $id) {
             $this->drawDi($state, $id, 2);
-            $starterColor = $state['zones']["c{$id}_1"]['pyramid']['color'];
-            // Prototype starter tile: a level-1 tile of the starting pyramid's color without "When acquired" units,
-            // preferring fully implemented ones (Onyx has none, so it falls back to a partial one).
-            $candidates = array_keys(array_filter(PrototypeRules::tiles(), fn($tile, $key) => $tile['color'] === $starterColor && $tile['level'] === 1
-                && empty($tile['mods']['acquire_units']) && !empty($state['market'][$key]), ARRAY_FILTER_USE_BOTH));
-            usort($candidates, fn($x, $y) => (PrototypeRules::tiles()[$x]['impl'] !== 'full') <=> (PrototypeRules::tiles()[$y]['impl'] !== 'full'));
-            if ($candidates) {
-                $state['market'][$candidates[0]] = false;
-                $this->acquireTile($state, $id, $candidates[0]);
-            }
         }
         $this->saveState($state);
-        $this->gamestate->changeActivePlayer((int) $order[0]);
+        $this->gamestate->changeActivePlayer((int) $state['starter']['queue'][0]);
+        return StarterTile::class;
+    }
+
+    /** Level 1 tiles the player may take at setup: in the market, of one of their Pyramid colors. */
+    public function starterOptions(array $state, string $id): array
+    {
+        $colors = [];
+        foreach ($state['zones'] as $zone) if (($zone['pyramid']['owner'] ?? null) === $id) $colors[] = $zone['pyramid']['color'];
+        $owned = array_map(fn($t) => PrototypeRules::tiles()[$t]['name'], $state['players'][$id]['tiles']);
+        $options = [];
+        foreach (PrototypeRules::tiles() as $key => $tile) {
+            if ($tile['level'] !== 1 || empty($state['market'][$key]) || !in_array($tile['color'], $colors, true) || in_array($tile['name'], $owned, true)) continue;
+            // One option per market stack: the top copy of a duplicate pair.
+            $options[$tile['stack']] ??= $key;
+        }
+        return array_values($options);
+    }
+
+    /** Records a setup tile choice. Returns true once every player has chosen. */
+    public function chooseStarter(array &$state, string $id, string $tile): bool
+    {
+        $starter = $state['starter'] ?? null;
+        if ($starter === null || $starter['queue'][$starter['index']] !== $id) throw new UserException(clienttranslate('It is not your setup choice.'));
+        if (!in_array($tile, $this->starterOptions($state, $id), true)) throw new UserException(clienttranslate('Choose a Level 1 Power tile of one of your Pyramid colors.'));
+        $state['market'][$tile] = false;
+        $this->event('buy', clienttranslate('${player_name} takes ${tile_name}'), ['player_id' => $id, 'tile' => $tile, 'tile_name' => PrototypeRules::tiles()[$tile]['name'], 'cost' => 0, 'i18n' => ['tile_name']]);
+        $this->acquireTile($state, $id, $tile);
+        $state['starter']['index']++;
+        if ($state['starter']['index'] < count($starter['queue'])) return false;
+        $state['starter'] = null;
+        return true;
+    }
+
+    // ---------------------------------------------------------------- turn structure
+
+    /** The current Day turn: whether the colored, silver and gold Action tokens were played, and any pending choice. */
+    public function turn(array &$state): array
+    {
+        $key = $state['round'] . ':' . $state['turnIndex'];
+        if (($state['turn']['key'] ?? '') !== $key) $state['turn'] = ['key' => $key, 'main' => false, 'silver' => false, 'gold' => false, 'pending' => null];
+        return $state['turn'];
+    }
+    public function turnPlayer(array $state): string
+    {
+        return $state['order'][$state['turnIndex'] % count($state['order'])];
+    }
+    public function silverAvailable(array $state, string $id): int
+    {
+        return $this->tileBonus($state, $id, 'silver') - count($state['players'][$id]['silverSlots'] ?? []);
+    }
+    /** Owned tiles with a Golden Action, usable once per round with the gold Action token. */
+    public function goldenTiles(array $state, string $id): array
+    {
+        return array_values(array_filter($state['players'][$id]['tiles'], fn($t) => isset(PrototypeRules::tiles()[$t]['golden'])));
+    }
+    /** True while the turn player may still play a silver or gold Action token this turn. */
+    public function bonusAvailable(array $state, string $id): bool
+    {
+        $turn = $this->turn($state);
+        $silver = !$turn['silver'] && $this->silverAvailable($state, $id) > 0
+            && (bool) array_filter(array_keys(PrototypeRules::SLOTS), fn($s) => $this->slotAllowed($state, $id, 'silver:' . $s));
+        $gold = !$turn['gold'] && empty($state['players'][$id]['goldUsed']) && $this->goldenTiles($state, $id);
+        return $silver || $gold;
+    }
+    /** State after a turn action resolved without a battle, or after its battle ended. */
+    public function afterAction(array &$state): string
+    {
+        if ($state['battle'] !== null) return BattleChoice::class;
+        $id = $this->turnPlayer($state);
+        $turn = $this->turn($state);
+        if ($turn['main'] && $turn['pending'] === null && !$this->bonusAvailable($state, $id)) return NextPlayer::class;
+        $this->gamestate->changeActivePlayer((int) $id);
         return PlayerTurn::class;
+    }
+    public function endTurn(array &$state, string $id): void
+    {
+        $turn = $this->turn($state);
+        if ($this->turnPlayer($state) !== $id || !$turn['main'] || $turn['pending'] !== null) throw new UserException(clienttranslate('Play one of your Action tokens before ending your turn.'));
     }
 
     protected function getAllDatas(int $currentPlayerId): array
@@ -131,8 +210,10 @@ class CoreGame extends \Bga\GameFramework\Table
         }
         unset($player);
         if ($view['battle'] !== null) {
-            if ($view['battle']['winner'] === null) {
+            if ($view['battle']['step'] === 'cards') {
+                $spyCard = $this->spyCard($state, $viewer);
                 $view['battle']['choices'] = array_fill_keys(array_keys($view['battle']['choices']), true);
+                if ($spyCard !== null) $view['battle']['spyCard'] = $spyCard;
             } else {
                 // The War Council discard stays facedown and is never revealed.
                 foreach ($view['battle']['choices'] as &$choice) unset($choice['discarded']);
@@ -155,16 +236,73 @@ class CoreGame extends \Bga\GameFramework\Table
      * Saves the state, sends queued log events, then one silent public state sync
      * and each player's private hands.
      */
-    public function notifyState(array $state): void
+    public function notifyState(array &$state): void
     {
+        $this->syncCreatures($state);
         $this->saveState($state);
         $events = $this->events;
         $this->events = [];
         foreach ($events as [$type, $message, $args]) $this->bga->notify->all($type, $message, $args);
         $this->bga->notify->all('kemetState', '', ['kemet' => $this->viewState($state)]);
         foreach ($state['players'] as $id => $player) {
-            $this->bga->notify->player((int) $id, 'hand', '', ['diHand' => $player['diHand'], 'battleHand' => $player['battleHand']]);
+            $this->bga->notify->player((int) $id, 'hand', '', ['diHand' => $player['diHand'], 'battleHand' => $player['battleHand'], 'spyCard' => $this->spyCard($state, (string) $id)]);
         }
+    }
+
+    /** Spy: the Battle card the opponent committed, shown to the Spy owner before they choose. */
+    public function spyCard(array $state, string $viewer): ?int
+    {
+        $battle = $state['battle'] ?? null;
+        if ($battle === null || ($battle['spy'] ?? null) !== $viewer || $battle['step'] !== 'cards') return null;
+        $opponent = $viewer === $battle['attacker'] ? $battle['defender'] : $battle['attacker'];
+        return $battle['choices'][$opponent]['played'] ?? null;
+    }
+
+    // ---------------------------------------------------------------- creatures
+
+    /** The Creature tile a player has tied to their Troop in a zone, if any. */
+    public function creatureAt(array $state, string $id, string $zone): ?string
+    {
+        foreach ($state['players'][$id]['creatures'] ?? [] as $tile => $at) if ($at === $zone) return (string) $tile;
+        return null;
+    }
+    public function creatureStats(array $state, string $id, string $zone): array
+    {
+        $tile = $this->creatureAt($state, $id, $zone);
+        return $tile === null ? [] : PrototypeRules::tiles()[$tile]['creature'];
+    }
+    /** A Creature no longer tied to a Troop goes back to its owner's supply. */
+    public function syncCreatures(array &$state): void
+    {
+        foreach ($state['players'] as $id => $player) {
+            foreach ($player['creatures'] ?? [] as $tile => $at) {
+                if ($at === null || ($state['zones'][$at]['units'][$id] ?? 0) > 0) continue;
+                $state['players'][$id]['creatures'][$tile] = null;
+                $this->event('log', clienttranslate('${tile_name} returns to ${player_name}\'s supply'), ['player_id' => (string) $id, 'tile_name' => PrototypeRules::tiles()[$tile]['name'], 'i18n' => ['tile_name']]);
+            }
+        }
+    }
+    /**
+     * Before playing an Action token, a player may place a Creature from their supply in a Troop in one of their
+     * Districts, exchange Creatures between those Troops, or send one back to their supply ($zone = '').
+     */
+    public function placeCreature(array &$state, string $id, string $tile, string $zone): void
+    {
+        if ($this->turnPlayer($state) !== $id || $this->turn($state)['pending'] !== null || $state['battle'] !== null) throw new UserException(clienttranslate('You can only arrange your Creatures during your turn.'));
+        if (!array_key_exists($tile, $state['players'][$id]['creatures'] ?? [])) throw new UserException(clienttranslate('You do not own that Creature.'));
+        $from = $state['players'][$id]['creatures'][$tile];
+        if ($zone !== '') {
+            $target = $state['zones'][$zone] ?? null;
+            if ($target === null || $target['kind'] !== 'district' || $target['city'] !== $id || ($target['units'][$id] ?? 0) < 1) throw new UserException(clienttranslate('Place Creatures with one of your Troops in your Districts.'));
+            $other = $this->creatureAt($state, $id, $zone);
+            if ($other !== null && $other !== $tile) $state['players'][$id]['creatures'][$other] = $from;
+        }
+        $state['players'][$id]['creatures'][$tile] = $zone === '' ? null : $zone;
+        $this->event('creature', $zone === '' ? clienttranslate('${player_name} returns ${tile_name} to their supply')
+            : clienttranslate('${player_name} ties ${tile_name} to their Troop in ${zone_name}'), [
+            'player_id' => $id, 'tile_name' => PrototypeRules::tiles()[$tile]['name'], 'zone' => $zone, 'i18n' => ['tile_name'],
+            'zone_name' => $zone === '' ? '' : $this->zoneArg($state, $zone),
+        ]);
     }
 
     /** Log argument for a zone: a nested, translatable "<name>" or "<city> <district>". */
@@ -205,20 +343,67 @@ class CoreGame extends \Bga\GameFramework\Table
         }
     }
 
-    public function requireSlot(array $state, string $id, string $slot, string $action): void
+    /**
+     * Validates the Action token a player plays for an action and returns what it is:
+     *   '<space>'         one of their 5 colored tokens (one per turn),
+     *   'silver:<space>'  a silver token on another empty space (Act of God, one per turn),
+     *   'gold:<tile>'     the gold token on the Divine Power space, resolving that tile's Golden Action (once per round).
+     * Equilibrium: the remaining colored tokens must still be able to cover every pyramid level.
+     */
+    public function requireSlot(array &$state, string $id, string $slot, string $action): array
     {
-        if (!isset(PrototypeRules::SLOTS[$slot]) || PrototypeRules::SLOTS[$slot]['action'] !== $action) throw new UserException(clienttranslate('Choose an action space of the right kind.'));
-        $used = $state['players'][$id]['slots'];
-        if (in_array($slot, $used, true) || count($used) >= 5) throw new UserException(clienttranslate('That action space is unavailable.'));
-        $tiers = array_unique(array_map(fn($s) => PrototypeRules::SLOTS[$s]['tier'], array_merge($used, [$slot])));
-        if (5 - count($used) - 1 < 3 - count($tiers)) throw new UserException(clienttranslate('Leave enough tokens to cover all three action tiers.'));
+        $turn = $this->turn($state);
+        if ($this->turnPlayer($state) !== $id || $state['battle'] !== null) throw new UserException(clienttranslate('It is not your turn.'));
+        if ($turn['pending'] !== null) throw new UserException(clienttranslate('Finish your current choice first.'));
+        $player = $state['players'][$id];
+        if (str_starts_with($slot, 'gold:')) {
+            $tile = substr($slot, 5);
+            $golden = in_array($tile, $player['tiles'], true) ? (PrototypeRules::tiles()[$tile]['golden'] ?? '') : '';
+            $actions = ['move_recruit' => ['move', 'recruit'], 'acquire' => ['buy'], 'move_noteleport' => ['move'], 'move_surprise' => ['move']][$golden] ?? [];
+            if (!in_array($action, $actions, true)) throw new UserException(clienttranslate('That Golden Action cannot take this action.'));
+            if ($turn['gold'] || !empty($player['goldUsed'])) throw new UserException(clienttranslate('Your gold Action token was already played this round.'));
+            return ['token' => 'gold', 'slot' => 'gold', 'tile' => $tile, 'golden' => $golden];
+        }
+        $silver = str_starts_with($slot, 'silver:');
+        $space = $silver ? substr($slot, 7) : $slot;
+        if (!isset(PrototypeRules::SLOTS[$space]) || PrototypeRules::SLOTS[$space]['action'] !== $action) throw new UserException(clienttranslate('Choose an action space of the right kind.'));
+        $occupied = array_merge($player['slots'], $player['silverSlots'] ?? []);
+        if (in_array($space, $occupied, true)) throw new UserException(clienttranslate('That action space is unavailable.'));
+        if ($silver) {
+            if ($turn['silver'] || $this->silverAvailable($state, $id) < 1) throw new UserException(clienttranslate('You have no silver Action token to play this turn.'));
+            $left = 5 - count($player['slots']);
+        } else {
+            if ($turn['main'] || count($player['slots']) >= 5) throw new UserException(clienttranslate('You already played one of your Action tokens this turn.'));
+            $left = 5 - count($player['slots']) - 1;
+        }
+        $tiers = array_unique(array_map(fn($s) => PrototypeRules::SLOTS[$s]['tier'], array_merge($occupied, [$space])));
+        if ($left < 3 - count($tiers)) throw new UserException(clienttranslate('Leave enough tokens to cover all three action tiers.'));
+        return ['token' => $silver ? 'silver' : 'color', 'slot' => $space, 'tile' => null, 'golden' => ''];
     }
 
-    /** True when the slot is free and placing a token there keeps the Equilibrium rule satisfiable. */
+    /** Places the validated Action token. */
+    public function useSlot(array &$state, string $id, array $info): void
+    {
+        $this->turn($state);
+        if ($info['token'] === 'gold') {
+            $state['players'][$id]['goldUsed'] = true;
+            $state['turn']['gold'] = true;
+        } elseif ($info['token'] === 'silver') {
+            $state['players'][$id]['silverSlots'][] = $info['slot'];
+            $state['turn']['silver'] = true;
+        } else {
+            $state['players'][$id]['slots'][] = $info['slot'];
+            $state['turn']['main'] = true;
+        }
+    }
+
+    /** True when the token can be played there now and the Equilibrium rule stays satisfiable. */
     public function slotAllowed(array $state, string $id, string $slot): bool
     {
+        $space = str_starts_with($slot, 'silver:') ? substr($slot, 7) : $slot;
+        if (!isset(PrototypeRules::SLOTS[$space])) return false;
         try {
-            $this->requireSlot($state, $id, $slot, PrototypeRules::SLOTS[$slot]['action']);
+            $this->requireSlot($state, $id, $slot, PrototypeRules::SLOTS[$space]['action']);
             return true;
         } catch (UserException) {
             return false;
@@ -275,17 +460,41 @@ class CoreGame extends \Bga\GameFramework\Table
         return $n;
     }
 
-    public function doPray(array &$state, string $id, string $slot): void
+    /**
+     * Pray. $reinforce lists the Districts (comma-separated, repeats allowed) receiving free Units from
+     * Reinforcement Prayer: up to 2 Units in total in the player's own City; a District held by an opponent
+     * triggers a Battle as for Recruit (the prototype resolves one Battle per action, so at most one such District).
+     */
+    public function doPray(array &$state, string $id, string $slot, string $reinforce = ''): void
     {
-        $this->requireSlot($state, $id, $slot, 'pray');
+        $info = $this->requireSlot($state, $id, $slot, 'pray');
         $pp = $this->gain($state, $id, 2 + $this->tileBonus($state, $id, 'pray'));
-        $state['players'][$id]['slots'][] = $slot;
+        $this->useSlot($state, $id, $info);
         $this->event('pray', clienttranslate('${player_name} prays and gains ${pp} PP'), ['player_id' => $id, 'pp' => $pp]);
+        $targets = $reinforce === '' ? [] : explode(',', $reinforce);
+        if (!$targets) return;
+        if (count($targets) > $this->tileBonus($state, $id, 'pray_units')) throw new UserException(clienttranslate('Reinforcement Prayer adds at most 2 Units.'));
+        $battleZone = null;
+        foreach (array_count_values($targets) as $zoneKey => $count) {
+            $zoneKey = (string) $zoneKey;
+            $zone = $state['zones'][$zoneKey] ?? null;
+            if ($zone === null || $zone['kind'] !== 'district' || $zone['city'] !== $id) throw new UserException(clienttranslate('Add the Units in your own Districts.'));
+            if (($zone['units'][$id] ?? 0) + $count > $this->troopLimit($state, $id) || $this->unitCount($state, $id) + $count > $this->supply($state, $id)) throw new UserException(clienttranslate('Troop limit or supply exceeded.'));
+            if ($this->controller($zone) !== $id) {
+                if ($battleZone !== null) throw new UserException(clienttranslate('Add Units to at most one District held by an opponent.'));
+                $battleZone = $zoneKey;
+            }
+            $state['zones'][$zoneKey]['units'][$id] = ($zone['units'][$id] ?? 0) + $count;
+            $this->event('recruit', clienttranslate('${player_name} adds ${units} unit(s) in ${zone_name} (Reinforcement Prayer)'), [
+                'player_id' => $id, 'units' => $count, 'zone' => $zoneKey, 'zone_name' => $this->zoneArg($state, $zoneKey),
+            ]);
+        }
+        if ($battleZone !== null) $this->battleIfNeeded($state, $id, $battleZone);
     }
 
     public function doRaise(array &$state, string $id, string $slot, string $zoneKey, string $color, int $level): void
     {
-        $this->requireSlot($state, $id, $slot, 'raise');
+        $info = $this->requireSlot($state, $id, $slot, 'raise');
         if (!isset($state['zones'][$zoneKey]) || $state['zones'][$zoneKey]['city'] !== $id || !in_array($color, $state['colors'], true) || $level < 1 || $level > 4) throw new UserException(clienttranslate('Invalid pyramid choice.'));
         $old = $state['zones'][$zoneKey]['pyramid'];
         if ($old !== null && ($old['owner'] !== $id || $old['color'] !== $color || $level <= $old['level'])) throw new UserException(clienttranslate('Choose your pyramid and a higher level.'));
@@ -297,7 +506,7 @@ class CoreGame extends \Bga\GameFramework\Table
         for ($i = ($old['level'] ?? 0) + 1; $i <= $level; $i++) $cost += max(0, $i - $discount);
         $cost = $this->spend($state, $id, $cost);
         $state['zones'][$zoneKey]['pyramid'] = ['owner' => $id, 'color' => $color, 'level' => $level];
-        $state['players'][$id]['slots'][] = $slot;
+        $this->useSlot($state, $id, $info);
         $this->bga->playerStats->inc('pyramid_levels', $level - ($old['level'] ?? 0), (int) $id);
         $this->event('raise', clienttranslate('${player_name} raises a ${color_name} pyramid to level ${level} in ${zone_name} for ${cost} PP'), [
             'player_id' => $id, 'color_name' => PrototypeRules::colorNames()[$color], 'level' => $level, 'cost' => $cost,
@@ -307,11 +516,14 @@ class CoreGame extends \Bga\GameFramework\Table
 
     public function doBuy(array &$state, string $id, string $slot, string $tile): void
     {
-        $this->requireSlot($state, $id, $slot, 'buy');
+        $info = $this->requireSlot($state, $id, $slot, 'buy');
+        // Twin Ceremony (Golden Action): no Acquire space needed, +1 PP, and the color may repeat this Round.
+        $twin = $info['golden'] === 'acquire';
+        $slot = $info['slot'];
         $tiles = PrototypeRules::tiles();
         if (!isset($tiles[$tile]) || empty($state['market'][$tile])) throw new UserException(clienttranslate('That power tile is unavailable.'));
         $def = $tiles[$tile];
-        if (in_array($def['color'], $state['players'][$id]['bought'], true)) throw new UserException(clienttranslate('You already bought a tile of that color today.'));
+        if (!$twin && in_array($def['color'], $state['players'][$id]['bought'], true)) throw new UserException(clienttranslate('You already bought a tile of that color today.'));
         foreach ($state['players'][$id]['tiles'] as $owned) if ($tiles[$owned]['name'] === $def['name']) throw new UserException(clienttranslate('You already own that Power tile.'));
         $ownPyramid = false;
         $foreignPyramid = false;
@@ -321,17 +533,17 @@ class CoreGame extends \Bga\GameFramework\Table
             else $foreignPyramid = true;
         }
         if (!$ownPyramid && !$foreignPyramid) throw new UserException(clienttranslate('Control a pyramid of this color and level first.'));
-        if ($ownPyramid && $slot !== 'buy_' . $def['color'] && !$foreignPyramid) throw new UserException(clienttranslate('Use the matching buy action space.'));
-        if ($foreignPyramid) {
+        if (!$twin && $ownPyramid && $slot !== 'buy_' . $def['color'] && !$foreignPyramid) throw new UserException(clienttranslate('Use the matching buy action space.'));
+        if (!$twin && $foreignPyramid) {
             $slotColor = substr($slot, 4);
             $hasToken = false;
             foreach ($state['zones'] as $zone) if ($zone['city'] === $id && ($zone['pyramid']['color'] ?? null) === $slotColor) $hasToken = true;
             if (!$hasToken) throw new UserException(clienttranslate('Use a buy space with one of your pyramid tokens.'));
         }
-        $cost = $this->spend($state, $id, max(0, $def['level'] - $this->tileBonus($state, $id, 'buy_discount')));
+        $cost = $this->spend($state, $id, max(0, $def['level'] - $this->tileBonus($state, $id, 'buy_discount')) + ($twin ? 1 : 0));
         $state['market'][$tile] = false;
         $state['players'][$id]['bought'][] = $def['color'];
-        $state['players'][$id]['slots'][] = $slot;
+        $this->useSlot($state, $id, $info);
         $this->bga->playerStats->inc('tiles_bought', 1, (int) $id);
         $this->event('buy', clienttranslate('${player_name} buys ${tile_name} for ${cost} PP'), [
             'player_id' => $id, 'tile' => $tile, 'tile_name' => $def['name'], 'cost' => $cost, 'i18n' => ['tile_name'],
@@ -344,6 +556,24 @@ class CoreGame extends \Bga\GameFramework\Table
     {
         $def = PrototypeRules::tiles()[$tile];
         $state['players'][$id]['tiles'][] = $tile;
+        if (isset($def['creature'])) {
+            // The Creature starts in the supply; the owner may tie it to a Troop in their Districts (placeCreature).
+            $state['players'][$id]['creatures'][$tile] = null;
+        }
+        if (!empty($def['mods']['silver'])) {
+            $this->event('log', clienttranslate('${player_name} gains 1 silver Action token'), ['player_id' => $id]);
+        }
+        if (isset($def['card'])) {
+            // Take back every Battle card, then remove 1 from the game in secret (removeBattleCard) for the Special card.
+            $player = &$state['players'][$id];
+            $player['battleDeck'] ??= PrototypeRules::BASE_BATTLE_CARDS;
+            $player['battleHand'] = $player['battleDeck'];
+            $player['battleDiscard'] = [];
+            $player['battlePlayed'] = [];
+            unset($player);
+            $this->turn($state);
+            $state['turn']['pending'] = ['type' => 'removeCard', 'card' => $def['card']];
+        }
         if (!empty($def['mods']['divine_fp'])) {
             $state['players'][$id]['permanent'] += $def['mods']['divine_fp'];
             $this->event('log', clienttranslate('${player_name} gains 1 Divine FP from ${tile_name}'), ['player_id' => $id, 'tile_name' => $def['name'], 'i18n' => ['tile_name']]);
@@ -370,17 +600,45 @@ class CoreGame extends \Bga\GameFramework\Table
         }
     }
 
-    public function doRecruit(array &$state, string $id, string $slot, string $zoneKey, int $units): void
+    /** Wrryt Storm / Shetyw Barrier: the player removes 1 Battle card from the game (kept secret) for the Special card. */
+    public function removeBattleCard(array &$state, string $id, int $card): void
     {
-        $this->requireSlot($state, $id, $slot, 'recruit');
-        if (!isset($state['zones'][$zoneKey]) || $state['zones'][$zoneKey]['city'] !== $id || $units < 1) throw new UserException(clienttranslate('Choose your city and at least one unit.'));
-        $room = min($this->troopLimit($state, $id) - ($state['zones'][$zoneKey]['units'][$id] ?? 0), $this->supply($state, $id) - $this->unitCount($state, $id));
+        $pending = $this->turn($state)['pending'];
+        if ($this->turnPlayer($state) !== $id || ($pending['type'] ?? '') !== 'removeCard') throw new UserException(clienttranslate('There is no Battle card to remove.'));
+        $player = &$state['players'][$id];
+        if (!in_array($card, $player['battleDeck'], true)) throw new UserException(clienttranslate('Choose one of your Battle cards.'));
+        $player['battleDeck'] = array_values(array_diff($player['battleDeck'], [$card]));
+        $player['battleDeck'][] = $pending['card'];
+        $player['battleHand'] = $player['battleDeck'];
+        unset($player);
+        $state['turn']['pending'] = null;
+        $this->event('log', clienttranslate('${player_name} removes a Battle card from the game in secret and adds ${card_name}'), [
+            'player_id' => $id, 'card_name' => PrototypeRules::battleCards()[$pending['card']]['name'], 'i18n' => ['card_name'],
+        ]);
+    }
+
+    /**
+     * Recruit into a District of the player's City, or with Local Recruitment into any of their Troops.
+     * $creature optionally ties a Creature from the supply to the Units added in a District.
+     */
+    public function doRecruit(array &$state, string $id, string $slot, string $zoneKey, int $units, string $creature = ''): void
+    {
+        $info = $this->requireSlot($state, $id, $slot, 'recruit');
+        $zone = $state['zones'][$zoneKey] ?? null;
+        $home = $zone !== null && $zone['kind'] === 'district' && $zone['city'] === $id;
+        $troop = $zone !== null && ($zone['units'][$id] ?? 0) > 0 && $this->tileBonus($state, $id, 'recruit_troops') > 0;
+        if ((!$home && !$troop) || $units < 1) throw new UserException(clienttranslate('Choose one of your Districts (or Troops with Local Recruitment) and at least one unit.'));
+        $room = min($this->troopLimit($state, $id) - ($zone['units'][$id] ?? 0), $this->supply($state, $id) - $this->unitCount($state, $id));
         if ($units > $room) throw new UserException(clienttranslate('Troop limit or supply exceeded.'));
+        if ($creature !== '' && (!$home || !array_key_exists($creature, $state['players'][$id]['creatures'] ?? []) || $state['players'][$id]['creatures'][$creature] !== null || $this->creatureAt($state, $id, $zoneKey) !== null)) {
+            throw new UserException(clienttranslate('That Creature cannot join these Units.'));
+        }
         // Each unit costs 1 PP; Recruiting Scribe, Local Recruitment and Reinforcement make some or all of them free.
         $this->spend($state, $id, max(0, $units - $this->tileBonus($state, $id, 'recruit_free')));
         $number = $units;
-        $state['zones'][$zoneKey]['units'][$id] = ($state['zones'][$zoneKey]['units'][$id] ?? 0) + $number;
-        $state['players'][$id]['slots'][] = $slot;
+        $state['zones'][$zoneKey]['units'][$id] = ($zone['units'][$id] ?? 0) + $number;
+        if ($creature !== '') $state['players'][$id]['creatures'][$creature] = $zoneKey;
+        $this->useSlot($state, $id, $info);
         $this->bga->playerStats->inc('units_recruited', $number, (int) $id);
         $this->event('recruit', clienttranslate('${player_name} recruits ${units} unit(s) in ${zone_name}'), [
             'player_id' => $id, 'units' => $number, 'zone' => $zoneKey, 'zone_name' => $this->zoneArg($state, $zoneKey),
@@ -388,51 +646,81 @@ class CoreGame extends \Bga\GameFramework\Table
         $this->battleIfNeeded($state, $id, $zoneKey);
     }
 
-    public function doMove(array &$state, string $id, string $slot, string $from, string $to, int $units, bool $teleport, string $via): void
+    /**
+     * Move action. $path lists the zones entered in order (comma-separated); a zone prefixed with '*' is reached by
+     * Teleportation (at most 1 per Move action, from a District with a controlled Pyramid, to an Obelisk zone).
+     * Land moves: 1 + Power tiles + the Creature tied to the moving Troop at the start of the action.
+     * $creature: the tied Creature moves along with these Units.
+     */
+    public function doMove(array &$state, string $id, string $slot, string $from, string $path, int $units, bool $creature = false): void
     {
-        $this->requireSlot($state, $id, $slot, 'move');
-        if (!isset($state['zones'][$from], $state['zones'][$to]) || $from === $to || $units < 1) throw new UserException(clienttranslate('Choose a valid move.'));
-        $source = &$state['zones'][$from];
-        $target = &$state['zones'][$to];
-        if (($source['units'][$id] ?? 0) < $units) throw new UserException(clienttranslate('Those units are not in the source zone.'));
-        if (($target['units'][$id] ?? 0) + $units > $this->troopLimit($state, $id)) throw new UserException(clienttranslate('A troop cannot exceed your Troop Limit.'));
-        $route = $via === '' ? [$to] : [$via, $to];
+        $info = $this->requireSlot($state, $id, $slot, 'move');
+        $steps = $path === '' ? [] : explode(',', $path);
+        if (!isset($state['zones'][$from]) || !$steps || $units < 1) throw new UserException(clienttranslate('Choose a valid move.'));
+        if (($state['zones'][$from]['units'][$id] ?? 0) < $units) throw new UserException(clienttranslate('Those units are not in the source zone.'));
+        $tiles = PrototypeRules::tiles();
+        $tied = $this->creatureAt($state, $id, $from);
+        $moving = $creature && $tied !== null ? $tiles[$tied]['creature'] : null;
+        if ($creature && $moving === null) throw new UserException(clienttranslate('There is no Creature tied to that Troop.'));
+        $landMoves = 1 + $this->tileBonus($state, $id, 'move') + ($tied !== null ? $tiles[$tied]['creature']['move'] : 0);
+        $noTeleport = $info['golden'] === 'move_noteleport';
+        // Phoenix (moving with the Troop) and Surprise Attack lift the Wall adjacency requirement for 1 opposing District.
+        $anyWall = !empty($moving['phoenix']) || $info['golden'] === 'move_surprise';
+        $costs = [];
         $previous = $from;
-        if ($teleport) {
-            $fromObelisk = $source['obelisk'] && $this->tileBonus($state, $id, 'teleport_obelisk') > 0;
-            if ((!$fromObelisk && ($this->controller($source) !== $id || $source['pyramid'] === null)) || !isset($state['zones'][$route[0]]) || !$state['zones'][$route[0]]['obelisk']) throw new UserException(clienttranslate('Teleport from a controlled pyramid to an obelisk.'));
-            $this->spend($state, $id, max(0, 2 - $this->tileBonus($state, $id, 'teleport_discount')));
-            $previous = array_shift($route);
-            if ($previous !== $to) {
-                foreach ($state['zones'][$previous]['units'] as $other => $count) if ((string) $other !== $id && $count > 0) throw new UserException(clienttranslate('A battle stops movement at the obelisk.'));
+        $land = 0;
+        $teleports = 0;
+        $foreign = 0;
+        $zones = [];
+        foreach ($steps as $index => $step) {
+            $teleport = str_starts_with($step, '*');
+            $key = $teleport ? substr($step, 1) : $step;
+            $next = $state['zones'][$key] ?? null;
+            if ($next === null || $key === $previous) throw new UserException(clienttranslate('The destination is unavailable.'));
+            $prev = $state['zones'][$previous];
+            if ($teleport) {
+                $obeliskStart = $prev['obelisk'] && ($this->tileBonus($state, $id, 'teleport_obelisk') > 0 || !empty($moving['griffin']));
+                $pyramidStart = $prev['kind'] === 'district' && $prev['pyramid'] !== null && $this->controller($prev) === $id;
+                if ($noTeleport || ++$teleports > 1) throw new UserException(clienttranslate('Only 1 Teleportation per Move action (none with Forced March).'));
+                if ((!$pyramidStart && !$obeliskStart) || !$next['obelisk']) throw new UserException(clienttranslate('Teleport from a controlled pyramid to an obelisk.'));
+                // Griffin Sphinx teleporting with its Troop makes the Teleportation free.
+                $costs[] = !empty($moving['griffin']) ? 0 : max(0, 2 - $this->tileBonus($state, $id, 'teleport_discount'));
+            } else {
+                if (++$land > $landMoves) throw new UserException(clienttranslate('Your Troop has no Land move left.'));
+                $byLand = in_array($key, $prev['neighbors'], true);
+                $harbor = !empty($prev['harbor']) && ($next['harbor'] === 'trade' || ($next['harbor'] === 'military' && $next['harborOwner'] === $id));
+                if (!$byLand && !$harbor) throw new UserException(clienttranslate('The route is not connected by land or a legal harbor.'));
             }
-        } elseif (count($route) > 1 && $this->tileBonus($state, $id, 'move') < 1) {
-            throw new UserException(clienttranslate('You need extra movement to cross two land routes.'));
-        }
-        $foreignDistricts = 0;
-        foreach ($route as $index => $step) {
-            if (!isset($state['zones'][$step])) throw new UserException(clienttranslate('The destination is unavailable.'));
-            $nextZone = $state['zones'][$step];
-            $land = in_array($step, $state['zones'][$previous]['neighbors'], true);
-            $harbor = !empty($state['zones'][$previous]['harbor']) && ($nextZone['harbor'] === 'trade' || ($nextZone['harbor'] === 'military' && $nextZone['harborOwner'] === $id));
-            if (!$land && !$harbor) throw new UserException(clienttranslate('The route is not connected by land or a legal harbor.'));
-            if ($nextZone['kind'] === 'district' && $nextZone['city'] !== $id) {
-                // Walls: the troop must start the Move action adjacent to that district, and may enter only one opponent district per move.
-                $foreignDistricts++;
-                if ($foreignDistricts > 1 || $teleport || $index !== 0 || !in_array($step, $state['zones'][$from]['neighbors'], true)) throw new UserException(clienttranslate('Enter one opponent district per move, starting the move adjacent to its walls.'));
+            if ($next['kind'] === 'district' && $next['city'] !== $id) {
+                // Walls: one opposing District per move, entered by land and only if the move started adjacent to it.
+                $foreign++;
+                if ($foreign > 1 || $teleport || (!$anyWall && !in_array($key, $state['zones'][$from]['neighbors'], true))) throw new UserException(clienttranslate('Enter one opponent district per move, starting the move adjacent to its walls.'));
             }
-            if ($index < count($route) - 1) foreach ($nextZone['units'] as $other => $count) if ((string) $other !== $id && $count > 0) throw new UserException(clienttranslate('A battle stops movement.'));
-            $previous = $step;
+            // Khnum's Sphinx: an opposing Troop pays 1 PP to enter the zone the Sphinx controls.
+            foreach (array_keys($state['players']) as $other) {
+                $other = (string) $other;
+                $sphinx = $other === $id ? null : $this->creatureAt($state, $other, $key);
+                if ($sphinx !== null && !empty($tiles[$sphinx]['creature']['khnum'])) $costs[] = 1;
+            }
+            $enemy = (bool) array_filter($next['units'], fn($n, $p) => (string) $p !== $id && $n > 0, ARRAY_FILTER_USE_BOTH);
+            if ($enemy && $index < count($steps) - 1) throw new UserException(clienttranslate('A battle stops movement.'));
+            $zones[] = $key;
+            $previous = $key;
         }
-        $source['units'][$id] -= $units;
-        if ($source['units'][$id] === 0) unset($source['units'][$id]);
-        $target['units'][$id] = ($target['units'][$id] ?? 0) + $units;
-        unset($source, $target);
-        $state['players'][$id]['slots'][] = $slot;
-        $this->event('move', $teleport
-            ? clienttranslate('${player_name} teleports ${units} unit(s) from ${from_name} to ${zone_name}')
+        $to = $previous;
+        if ($to === $from) throw new UserException(clienttranslate('Choose a valid move.'));
+        if (($state['zones'][$to]['units'][$id] ?? 0) + $units > $this->troopLimit($state, $id)) throw new UserException(clienttranslate('A troop cannot exceed your Troop Limit.'));
+        if ($moving !== null && $this->creatureAt($state, $id, $to) !== null) throw new UserException(clienttranslate('A Troop can have only 1 Creature.'));
+        foreach ($costs as $cost) $this->spend($state, $id, $cost);
+        $state['zones'][$from]['units'][$id] -= $units;
+        if ($state['zones'][$from]['units'][$id] === 0) unset($state['zones'][$from]['units'][$id]);
+        $state['zones'][$to]['units'][$id] = ($state['zones'][$to]['units'][$id] ?? 0) + $units;
+        if ($moving !== null) $state['players'][$id]['creatures'][$tied] = $to;
+        $this->useSlot($state, $id, $info);
+        $this->event('move', $teleports
+            ? clienttranslate('${player_name} moves ${units} unit(s) from ${from_name} to ${zone_name}, teleporting')
             : clienttranslate('${player_name} moves ${units} unit(s) from ${from_name} to ${zone_name}'), [
-            'player_id' => $id, 'units' => $units, 'from' => $from, 'zone' => $to, 'via' => $via,
+            'player_id' => $id, 'units' => $units, 'from' => $from, 'zone' => $to, 'path' => $zones, 'via' => '',
             'from_name' => $this->zoneArg($state, $from), 'zone_name' => $this->zoneArg($state, $to),
         ]);
         $this->battleIfNeeded($state, $id, $to);
@@ -459,10 +747,14 @@ class CoreGame extends \Bga\GameFramework\Table
     {
         foreach ($state['zones'][$zoneKey]['units'] as $defender => $units) {
             if ((string) $defender !== $attacker && $units > 0) {
-                $state['battle'] = ['zone' => $zoneKey, 'attacker' => $attacker, 'defender' => (string) $defender, 'choices' => [], 'winner' => null, 'loser' => null, 'step' => 'cards'];
-                foreach ([$attacker, (string) $defender] as $player) $this->bga->playerStats->inc('battles_fought', 1, (int) $player);
+                $defender = (string) $defender;
+                // Spy: the opponent of the Spy owner commits first and shows their Battle card.
+                $spy = $this->tileBonus($state, $attacker, 'spy') > 0 ? $attacker : ($this->tileBonus($state, $defender, 'spy') > 0 ? $defender : null);
+                $state['battle'] = ['zone' => $zoneKey, 'attacker' => $attacker, 'defender' => $defender, 'choices' => [], 'winner' => null, 'loser' => null,
+                    'step' => 'cards', 'spy' => $spy, 'wound' => [], 'woundQueue' => []];
+                foreach ([$attacker, $defender] as $player) $this->bga->playerStats->inc('battles_fought', 1, (int) $player);
                 $this->event('battleStart', clienttranslate('${player_name} attacks ${player_name2} in ${zone_name}'), [
-                    'player_id' => $attacker, 'player_id2' => (string) $defender, 'zone' => $zoneKey, 'zone_name' => $this->zoneArg($state, $zoneKey),
+                    'player_id' => $attacker, 'player_id2' => $defender, 'zone' => $zoneKey, 'zone_name' => $this->zoneArg($state, $zoneKey),
                 ]);
                 // Start of the War Council step, attacker only: Dedication to Battle and Priest of Thoeris.
                 $pp = $this->gain($state, $attacker, $this->tileBonus($state, $attacker, 'attack_pp'));
@@ -472,20 +764,35 @@ class CoreGame extends \Bga\GameFramework\Table
                     $this->drawDi($state, $attacker, $draw);
                     $this->event('log', clienttranslate('${player_name} draws ${n} DI card(s) from Priest of Thoeris'), ['player_id' => $attacker, 'n' => $draw]);
                 }
+                if ($spy !== null) $this->event('log', clienttranslate('${player_name}\'s Spy will see the opposing Battle card first'), ['player_id' => $spy]);
                 break;
             }
         }
     }
 
+    /** Players who must still make their War Council choice now (the Spy owner waits for their opponent). */
+    public function battleChoosers(array $state): array
+    {
+        $battle = $state['battle'];
+        $out = [];
+        foreach ([$battle['attacker'], $battle['defender']] as $id) {
+            if (isset($battle['choices'][$id])) continue;
+            $opponent = $id === $battle['attacker'] ? $battle['defender'] : $battle['attacker'];
+            if (($battle['spy'] ?? null) === $id && !isset($battle['choices'][$opponent])) continue;
+            $out[] = $id;
+        }
+        return $out;
+    }
+
     /**
      * Records a War Council choice. $di is a comma-separated list of battle DI cards.
-     * Returns '' while waiting for the other player, otherwise the winner's id.
-     * After resolution $state['battle'] is null when no aftermath choice remains.
+     * Returns '' while waiting for the other player, 'wound' when a Divine Wound choice follows the Confrontation,
+     * otherwise the winner's id. After resolution $state['battle'] is null when no aftermath choice remains.
      */
     public function battleChoice(array &$state, string $id, int $played, int $discarded, string $di): string
     {
-        $battle = &$state['battle'];
-        if ($battle === null || $battle['step'] !== 'cards' || isset($battle['choices'][$id]) || !in_array($id, [$battle['attacker'], $battle['defender']], true)) throw new UserException(clienttranslate('It is not your battle choice.'));
+        $battle = $state['battle'];
+        if ($battle === null || $battle['step'] !== 'cards' || !in_array($id, $this->battleChoosers($state), true)) throw new UserException(clienttranslate('It is not your battle choice.'));
         $hand = $state['players'][$id]['battleHand'];
         if ($played === $discarded || !in_array($played, $hand, true) || !in_array($discarded, $hand, true)) throw new UserException(clienttranslate('Choose two different battle cards from your hand.'));
         $cards = $di === '' ? [] : explode(',', $di);
@@ -498,10 +805,74 @@ class CoreGame extends \Bga\GameFramework\Table
             $cost += $this->cost($state, $id, $defs[$card]['cost']) * $count;
         }
         if ($state['players'][$id]['pp'] < $cost) throw new UserException(clienttranslate('Not enough prayer for those DI cards.'));
-        $battle['choices'][$id] = ['played' => $played, 'discarded' => $discarded, 'di' => $cards];
-        if (count($battle['choices']) < 2) return '';
-        unset($battle);
+        $state['battle']['choices'][$id] = ['played' => $played, 'discarded' => $discarded, 'di' => $cards];
+        if (count($state['battle']['choices']) < 2) return '';
+        $this->confront($state);
+        if ($state['battle']['woundQueue']) {
+            $state['battle']['step'] = 'wound';
+            return 'wound';
+        }
         return $this->resolveBattle($state);
+    }
+
+    /** Confrontation: both players reveal their Battle card and DI cards and pay for the DI cards. */
+    private function confront(array &$state): void
+    {
+        $battle = &$state['battle'];
+        $cardsDef = PrototypeRules::battleCards();
+        $diDef = PrototypeRules::di();
+        foreach ([$battle['attacker'], $battle['defender']] as $id) {
+            $choice = $battle['choices'][$id];
+            foreach ($choice['di'] as $di) {
+                $this->spend($state, $id, $diDef[$di]['cost']);
+                $key = array_search($di, $state['players'][$id]['diHand'], true);
+                array_splice($state['players'][$id]['diHand'], $key, 1);
+                $state['diDiscard'][] = $di;
+            }
+            $this->event('log', clienttranslate('${player_name} reveals ${card_name} and ${n} DI card(s)'), [
+                'player_id' => $id, 'card_name' => $cardsDef[$choice['played']]['name'], 'n' => count($choice['di']), 'i18n' => ['card_name'],
+            ]);
+        }
+        // Divine Wound, end of Confrontation step: attacker first, then defender, if they hold DI cards they may discard.
+        $battle['step'] = 'confront';
+        $battle['woundQueue'] = array_values(array_filter([$battle['attacker'], $battle['defender']],
+            fn($id) => $this->tileBonus($state, $id, 'divine_wound') > 0 && $this->woundCards($state, $id)));
+        unset($battle);
+    }
+
+    /** DI cards that can be discarded for an effect (Diversion never can). */
+    public function woundCards(array $state, string $id): array
+    {
+        return array_values(array_filter($state['players'][$id]['diHand'], fn($c) => $c !== 'diversion'));
+    }
+
+    /** Divine Wound: discard DI cards ($cards comma-separated, possibly none) for +1 Strength each. */
+    public function woundChoice(array &$state, string $id, string $cards): string
+    {
+        $battle = $state['battle'];
+        if ($battle === null || $battle['step'] !== 'wound' || ($battle['woundQueue'][0] ?? null) !== $id) throw new UserException(clienttranslate('It is not your Divine Wound choice.'));
+        $list = $cards === '' ? [] : explode(',', $cards);
+        $hand = $state['players'][$id]['diHand'];
+        foreach ($list as $card) {
+            $key = array_search($card, $hand, true);
+            if ($card === 'diversion' || $key === false) throw new UserException(clienttranslate('Choose DI cards from your hand (not Diversion).'));
+            array_splice($hand, $key, 1);
+            $state['diDiscard'][] = $card;
+        }
+        $state['players'][$id]['diHand'] = $hand;
+        $state['battle']['wound'][$id] = count($list);
+        array_shift($state['battle']['woundQueue']);
+        if ($list) $this->event('log', clienttranslate('${player_name} discards ${n} DI card(s) for Divine Wound: +${n} Strength'), ['player_id' => $id, 'n' => count($list)]);
+        if ($state['battle']['woundQueue']) return 'wound';
+        return $this->resolveBattle($state);
+    }
+
+    /** Battle bonuses of the Creature tied to a player's Troop in the battle zone (cancelled by an opposing Deep Desert Snake). */
+    private function battleCreature(array $state, string $id, string $opponent): array
+    {
+        $zone = $state['battle']['zone'];
+        if (!empty($this->creatureStats($state, $opponent, $zone)['snake'])) return [];
+        return $this->creatureStats($state, $id, $zone);
     }
 
     private function resolveBattle(array &$state): string
@@ -509,24 +880,19 @@ class CoreGame extends \Bga\GameFramework\Table
         $battle = &$state['battle'];
         $zone = &$state['zones'][$battle['zone']];
         $cardsDef = PrototypeRules::battleCards();
-        $diDef = PrototypeRules::di();
         $totals = [];
         foreach ([$battle['attacker'], $battle['defender']] as $id) {
             $choice = $battle['choices'][$id];
             $card = $cardsDef[$choice['played']];
             $attacking = $id === $battle['attacker'];
-            foreach ($choice['di'] as $di) {
-                $this->spend($state, $id, $diDef[$di]['cost']);
-                $key = array_search($di, $state['players'][$id]['diHand'], true);
-                array_splice($state['players'][$id]['diHand'], $key, 1);
-                $state['diDiscard'][] = $di;
-            }
+            $opponent = $attacking ? $battle['defender'] : $battle['attacker'];
+            $creature = $this->battleCreature($state, $id, $opponent);
             $di = array_count_values($choice['di']);
             // Power tile bonuses: any battle, plus attack_* or defend_* depending on the side.
             $side = $attacking ? 'attack_' : 'defend_';
-            $bonus = fn(string $stat) => $this->tileBonus($state, $id, $stat) + $this->tileBonus($state, $id, $side . $stat);
+            $bonus = fn(string $stat) => $this->tileBonus($state, $id, $stat) + $this->tileBonus($state, $id, $side . $stat) + ($creature[$stat] ?? 0);
             $totals[$id] = [
-                'strength' => ($zone['units'][$id] ?? 0) + $card['strength'] + $bonus('strength') + (int) ($zone['city'] === $id) + ($di['fury'] ?? 0) * 2,
+                'strength' => ($zone['units'][$id] ?? 0) + $card['strength'] + $bonus('strength') + (int) ($zone['city'] === $id) + ($di['fury'] ?? 0) * 2 + ($battle['wound'][$id] ?? 0),
                 'damage' => $card['damage'] + $bonus('damage'),
                 'pierce' => $card['pierce'] + $bonus('pierce') + ($di['wound'] ?? 0),
                 'shield' => $card['shield'] + $bonus('shield') + ($di['wall'] ?? 0) * 2,
@@ -537,12 +903,13 @@ class CoreGame extends \Bga\GameFramework\Table
             $player['battleDiscard'][] = $choice['discarded'];
             $player['battlePlayed'][] = $choice['played'];
             if (!$player['battleHand']) {
-                $player['battleHand'] = array_keys($cardsDef);
+                $player['battleHand'] = $player['battleDeck'] ?? PrototypeRules::BASE_BATTLE_CARDS;
                 $player['battleDiscard'] = [];
                 $player['battlePlayed'] = [];
             }
             unset($player);
         }
+
         $a = $battle['attacker'];
         $d = $battle['defender'];
         $battle['winner'] = $totals[$a]['strength'] > $totals[$d]['strength'] ? $a : $d;
@@ -640,6 +1007,8 @@ class CoreGame extends \Bga\GameFramework\Table
             $units = $state['zones'][$zoneKey]['units'][$loser];
             $state['zones'][$retreatTo]['units'][$loser] = ($state['zones'][$retreatTo]['units'][$loser] ?? 0) + $units;
             unset($state['zones'][$zoneKey]['units'][$loser]);
+            $creature = $this->creatureAt($state, $loser, $zoneKey);
+            if ($creature !== null && $this->creatureAt($state, $loser, $retreatTo) === null) $state['players'][$loser]['creatures'][$creature] = $retreatTo;
             $this->event('move', clienttranslate('${player_name} sends ${player_name2}\'s troop retreating to ${zone_name}'), [
                 'player_id' => $id, 'player_id2' => $loser, 'mover' => $loser, 'units' => $units, 'from' => $zoneKey, 'zone' => $retreatTo,
                 'zone_name' => $this->zoneArg($state, $retreatTo),
@@ -705,7 +1074,8 @@ class CoreGame extends \Bga\GameFramework\Table
             $this->gain($state, $id, $choice['pray']);
             $draw = min($choice['draw'], $state['players'][$id]['veterans']);
             $state['players'][$id]['veterans'] -= $draw;
-            $this->drawDi($state, $id, 1 + $draw + $this->tileBonus($state, $id, 'night_di'));
+            // Divine Boon and The Mummy draw 1 more; Vision draws 4 more, discarded again in the NightPowers state.
+            $this->drawDi($state, $id, 1 + $draw + $this->tileBonus($state, $id, 'night_di') + $this->tileBonus($state, $id, 'vision'));
             $recruit = min($choice['recruit'], $state['players'][$id]['veterans'], $this->supply($state, $id) - $this->unitCount($state, $id));
             $district = $choice['district'];
             if ($recruit > 0 && isset($state['zones'][$district]) && $state['zones'][$district]['city'] === $id && $this->controller($state['zones'][$district]) === $id) {
@@ -716,15 +1086,85 @@ class CoreGame extends \Bga\GameFramework\Table
                 ]);
             }
             $state['players'][$id]['veterans'] = 0;
+            // Awakening: Action tokens (colored, silver and gold) return to their owner.
             $state['players'][$id]['slots'] = [];
+            $state['players'][$id]['silverSlots'] = [];
+            $state['players'][$id]['goldUsed'] = false;
             $state['players'][$id]['bought'] = [];
         }
-        // Destiny: fewest FP chooses a turn-order space first; ties go to the player who was leftmost.
+        $state['night'] = null;
+        // Night Power choices, in turn order: Vision (discard 4 DI cards), then Hand of God (free Build) at Awakening.
+        $queue = [];
+        foreach ($state['order'] as $id) {
+            $discard = min($this->tileBonus($state, $id, 'vision'), count($this->woundCards($state, $id)));
+            if ($discard > 0) $queue[] = ['player' => $id, 'task' => 'vision', 'count' => $discard];
+        }
+        foreach ($state['order'] as $id) {
+            if ($this->tileBonus($state, $id, 'hand_of_god') > 0 && $this->handOfGodOptions($state, $id)) $queue[] = ['player' => $id, 'task' => 'handOfGod', 'count' => 1];
+        }
+        $state['nightPowers'] = $queue ?: null;
+    }
+
+    /** Destiny: fewest FP chooses a turn-order space first; ties go to the player who was leftmost. */
+    public function startDestiny(array &$state): void
+    {
         $old = array_flip($state['order']);
         $queue = $state['order'];
         usort($queue, fn($a, $b) => $this->score($state, $a) <=> $this->score($state, $b) ?: $old[$a] <=> $old[$b]);
-        $state['night'] = null;
+        $state['nightPowers'] = null;
         $state['destiny'] = ['queue' => $queue, 'index' => 0, 'positions' => array_fill(0, count($queue), null)];
+    }
+
+    /** Hand of God targets: own Pyramids below Level 4, and empty own Districts for a new Level 1 Pyramid (zone => colors). */
+    public function handOfGodOptions(array $state, string $id): array
+    {
+        $owned = [];
+        foreach ($state['zones'] as $zone) if (($zone['pyramid']['owner'] ?? null) === $id) $owned[] = $zone['pyramid']['color'];
+        $free = array_values(array_diff($state['colors'], $owned));
+        $options = [];
+        foreach ($state['zones'] as $key => $zone) {
+            if (($zone['pyramid']['owner'] ?? null) === $id && $zone['pyramid']['level'] < 4) $options[$key] = [$zone['pyramid']['color']];
+            elseif ($zone['kind'] === 'district' && $zone['city'] === $id && $zone['pyramid'] === null && $free) $options[$key] = $free;
+        }
+        return $options;
+    }
+
+    /**
+     * Resolves the first Night Power choice. Vision: $choice lists the DI cards to discard (comma-separated).
+     * Hand of God: $choice is '<zone>:<color>', or '' to skip. Returns true when no choice remains.
+     */
+    public function nightPower(array &$state, string $id, string $choice): bool
+    {
+        $task = $state['nightPowers'][0] ?? null;
+        if ($task === null || $task['player'] !== $id) throw new UserException(clienttranslate('It is not your Night Power choice.'));
+        if ($task['task'] === 'vision') {
+            $cards = $choice === '' ? [] : explode(',', $choice);
+            if (count($cards) !== $task['count']) throw new UserException(clienttranslate('Discard exactly the required number of DI cards.'));
+            $hand = $state['players'][$id]['diHand'];
+            foreach ($cards as $card) {
+                $key = array_search($card, $hand, true);
+                if ($card === 'diversion' || $key === false) throw new UserException(clienttranslate('Choose DI cards from your hand (not Diversion).'));
+                array_splice($hand, $key, 1);
+                $state['diDiscard'][] = $card;
+            }
+            $state['players'][$id]['diHand'] = $hand;
+            $this->event('log', clienttranslate('${player_name} discards ${n} DI cards (Vision)'), ['player_id' => $id, 'n' => count($cards)]);
+        } elseif ($choice !== '') {
+            [$zoneKey, $color] = array_pad(explode(':', $choice), 2, '');
+            $options = $this->handOfGodOptions($state, $id);
+            if (!in_array($color, $options[$zoneKey] ?? [], true)) throw new UserException(clienttranslate('Choose one of your Pyramids, or an empty District for a new one.'));
+            $level = ($state['zones'][$zoneKey]['pyramid']['level'] ?? 0) + 1;
+            $state['zones'][$zoneKey]['pyramid'] = ['owner' => $id, 'color' => $color, 'level' => $level];
+            $this->bga->playerStats->inc('pyramid_levels', 1, (int) $id);
+            $this->event('raise', clienttranslate('${player_name} raises a ${color_name} pyramid to level ${level} in ${zone_name} for free (Hand of God)'), [
+                'player_id' => $id, 'color_name' => PrototypeRules::colorNames()[$color], 'level' => $level, 'cost' => 0,
+                'zone_name' => $this->zoneArg($state, $zoneKey), 'zone' => $zoneKey, 'i18n' => ['color_name'],
+            ]);
+        }
+        array_shift($state['nightPowers']);
+        if ($state['nightPowers']) return false;
+        $state['nightPowers'] = null;
+        return true;
     }
 
     /** Places the chooser's order marker. Returns true once every marker is placed and the new Day can start. */

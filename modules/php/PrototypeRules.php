@@ -15,7 +15,8 @@ final class PrototypeRules
     /**
      * Action spaces on the Individual board pyramid (Player Board Front art), tier 3 = top level.
      * Top: Move, Recruit. Middle: Raise, Move, Pray. Bottom: Pray and the Buy a Power Tile spaces.
-     * The Divine Will gold space above them needs Gold Action tokens, which the prototype does not have.
+     * The Divine Power space at the top takes the gold Action token (slot 'gold:<tile>', a Golden Action from an owned tile);
+     * a silver Action token is played on any empty space (slot 'silver:<space>').
      */
     public const SLOTS = [
         'move_a' => ['tier' => 3, 'action' => 'move'],
@@ -62,8 +63,15 @@ final class PrototypeRules
             6 => ['name' => clienttranslate('Skirmish'), 'strength' => 2, 'damage' => 1, 'pierce' => 0, 'shield' => 1],
             7 => ['name' => clienttranslate('Shield Wall'), 'strength' => 1, 'damage' => 0, 'pierce' => 0, 'shield' => 3],
             8 => ['name' => clienttranslate('Sacrifice'), 'strength' => 1, 'damage' => 0, 'pierce' => 2, 'shield' => 0],
+            // Special Battle cards gained from the Wrryt Storm / Shetyw Barrier tiles ('tile' = art source).
+            // The supplied PDFs do not print these cards, so their values are provisional ('unverified').
+            9 => ['name' => clienttranslate('Wrryt Storm'), 'strength' => 3, 'damage' => 2, 'pierce' => 1, 'shield' => 0, 'special' => true, 'tile' => 'ruby_wrryt_storm', 'unverified' => true],
+            10 => ['name' => clienttranslate('Shetyw Barrier'), 'strength' => 3, 'damage' => 0, 'pierce' => 0, 'shield' => 3, 'special' => true, 'tile' => 'sapphire_shetyw_barrier', 'unverified' => true],
         ];
     }
+
+    /** The 8 Battle cards every player starts with. */
+    public const BASE_BATTLE_CARDS = [1, 2, 3, 4, 5, 6, 7, 8];
 
     public static function di(): array
     {
@@ -78,89 +86,102 @@ final class PrototypeRules
     }
 
     /**
-     * The 64 printed Power tiles (Player Aid pages 1-4), keyed by color, name and copy.
-     *   art   index in img/power-tiles.jpg (Punchboard Front order)
-     *   mods  effect modifiers the engine applies (see CoreGame::tileBonus); empty when not modelled
-     *   impl  'full', 'partial' (only the listed mods apply) or 'none' (effect not implemented yet)
-     *   aog   true for Act of God tiles, removed in 2-player games together with second copies (copy 2)
+     * The 64 printed Power tiles (Player Aid v DEF pages 1-4), keyed by color, name and copy.
+     *   art       index in img/power-tiles.jpg (Punchboard Front order)
+     *   mods      passive modifiers summed by CoreGame::tileBonus()
+     *   creature  stats of the Creature tied to a Troop: move, strength, damage, shield, plus special flags
+     *             (snake: ignores the opposing Creature; phoenix: may enter 1 opposing District without adjacency;
+     *             griffin: free Teleportation, also from an Obelisk; khnum: opponents pay 1 PP to enter its zone)
+     *   golden    Golden Action resolved with the gold Action token: move_recruit, acquire, move_noteleport, move_surprise
+     *   card      Special Battle card id gained when acquired (see battleCards())
+     *   aog       Act of God, removed in 2-player games together with second copies (copy 2)
+     *   stack     market stack shared by duplicate copies
      * Cost is always the tile level in PP.
      */
     public static function tiles(): array
     {
-        $t = fn(string $name, string $color, int $level, int $art, string $text, array $mods = [], string $impl = 'full', int $copy = 1) =>
-            ['name' => $name, 'color' => $color, 'level' => $level, 'art' => $art, 'text' => $text, 'mods' => $mods, 'impl' => $impl, 'copy' => $copy];
+        $t = fn(string $name, string $color, int $level, int $art, string $text, array $mods = [], array $extra = [], int $copy = 1) =>
+            ['name' => $name, 'color' => $color, 'level' => $level, 'art' => $art, 'text' => $text, 'mods' => $mods, 'copy' => $copy] + $extra;
+        $creature = fn(int $move, int $strength, int $damage = 0, int $shield = 0, array $flags = []) =>
+            ['creature' => ['move' => $move, 'strength' => $strength, 'damage' => $damage, 'shield' => $shield] + $flags];
         $domination = clienttranslate('When acquired: gain 1 Divine FP.');
-        $actOfGod = clienttranslate('When acquired: gain 1 silver Action token.');
+        $actOfGod = clienttranslate('When acquired: gain 1 silver Action token (play it on any empty action space together with one of your own Action tokens, once per round).');
         $tiles = [
             // Onyx
             'onyx_sword_mercenaries' => $t(clienttranslate('Sword Clan Mercenaries'), 'onyx', 1, 0, clienttranslate('When acquired: the 3 Sword Clan Mercenaries join your faction for the rest of the game. Add them to your Districts.'), ['acquire_units' => 3]),
-            'onyx_spear_mercenaries' => $t(clienttranslate('Spear Clan Mercenaries'), 'onyx', 1, 1, clienttranslate('When acquired: the 3 Spear Clan Mercenaries join your faction for the rest of the game. Add them to your Districts.'), ['acquire_units' => 3]),
-            'onyx_local_recruitment' => $t(clienttranslate('Local Recruitment'), 'onyx', 1, 2, clienttranslate('Recruit action: add 1 Unit for free (into your Districts and/or your Troops).'), ['recruit_free' => 1], 'partial'),
-            'onyx_local_recruitment_2' => $t(clienttranslate('Local Recruitment'), 'onyx', 1, 3, clienttranslate('Recruit action: add 1 Unit for free (into your Districts and/or your Troops).'), ['recruit_free' => 1], 'partial', 2),
+            // The Player Aid prints both Mercenaries as one tile, so they are a duplicate pair (2 players keep only Sword Clan).
+            'onyx_spear_mercenaries' => $t(clienttranslate('Spear Clan Mercenaries'), 'onyx', 1, 1, clienttranslate('When acquired: the 3 Spear Clan Mercenaries join your faction for the rest of the game. Add them to your Districts.'), ['acquire_units' => 3], [], 2),
+            'onyx_local_recruitment' => $t(clienttranslate('Local Recruitment'), 'onyx', 1, 2, clienttranslate('Recruit action: add 1 Unit for free, and you may add your Units to your Troops anywhere on the board instead of only your Districts.'), ['recruit_free' => 1, 'recruit_troops' => 1]),
+            'onyx_local_recruitment_2' => $t(clienttranslate('Local Recruitment'), 'onyx', 1, 3, clienttranslate('Recruit action: add 1 Unit for free, and you may add your Units to your Troops anywhere on the board instead of only your Districts.'), ['recruit_free' => 1, 'recruit_troops' => 1], [], 2),
             'onyx_honor_in_battle' => $t(clienttranslate('Honor in Battle'), 'onyx', 2, 4, clienttranslate('Battle, end of Casualties step: gain 1 PP for each of your Units removed by opposing Damage.'), ['pp_per_loss' => 1]),
             'onyx_dedication_to_battle' => $t(clienttranslate('Dedication to Battle'), 'onyx', 2, 5, clienttranslate('Battle, Attack, start of War Council step: gain 2 PP.'), ['attack_pp' => 2]),
-            'onyx_khnums_sphinx' => $t(clienttranslate('Khnum\'s Sphinx'), 'onyx', 2, 6, clienttranslate('Creature. Tied Troop: Move action +1 Land move; Battle +1 Strength. An opposing Troop must spend 1 additional PP to enter the zone controlled by Khnum\'s Sphinx.'), [], 'none'),
-            'onyx_twin_ceremony' => $t(clienttranslate('Twin Ceremony'), 'onyx', 2, 7, clienttranslate('Golden Action: take 1 Acquire action by spending 1 additional PP, possibly in a color you already acquired this Round.'), [], 'none'),
-            'onyx_griffin_sphinx' => $t(clienttranslate('Griffin Sphinx'), 'onyx', 3, 8, clienttranslate('Creature. Tied Troop: if the Griffin Sphinx teleports with its Troop, the Teleportation is free and may start from an Obelisk zone; Battle +2 Strength.'), [], 'none'),
-            'onyx_forced_march' => $t(clienttranslate('Forced March'), 'onyx', 3, 9, clienttranslate('Golden Action: take 1 Move action during which you cannot use any Teleportation.'), [], 'none'),
+            'onyx_khnums_sphinx' => $t(clienttranslate('Khnum\'s Sphinx'), 'onyx', 2, 6, clienttranslate('Creature. Tied Troop: Move action +1 Land move; Battle +1 Strength. An opposing Troop must spend 1 additional PP to enter the zone controlled by Khnum\'s Sphinx.'), [], $creature(1, 1, 0, 0, ['khnum' => true])),
+            'onyx_twin_ceremony' => $t(clienttranslate('Twin Ceremony'), 'onyx', 2, 7, clienttranslate('Golden Action: take 1 Acquire action by spending 1 additional PP, possibly in a color you already acquired this Round.'), [], ['golden' => 'acquire']),
+            'onyx_griffin_sphinx' => $t(clienttranslate('Griffin Sphinx'), 'onyx', 3, 8, clienttranslate('Creature. Tied Troop: if the Griffin Sphinx teleports with its Troop, the Teleportation is free and may start from an Obelisk zone; Battle +2 Strength.'), [], $creature(0, 2, 0, 0, ['griffin' => true])),
+            'onyx_forced_march' => $t(clienttranslate('Forced March'), 'onyx', 3, 9, clienttranslate('Golden Action: take 1 Move action during which you cannot use any Teleportation.'), [], ['golden' => 'move_noteleport']),
             'onyx_deadly_trap' => $t(clienttranslate('Deadly Trap'), 'onyx', 3, 10, clienttranslate('Battle, Defense: your Troops gain +1 Strength and +1 Unblockable Damage.'), ['defend_strength' => 1, 'defend_pierce' => 1]),
             'onyx_domination' => $t(clienttranslate('Domination'), 'onyx', 3, 11, $domination, ['divine_fp' => 1]),
-            'onyx_amout' => $t(clienttranslate('Amout, the Soul Devourer'), 'onyx', 4, 12, clienttranslate('Creature. Tied Troop: Move action +1 Land move; Battle +2 Strength. Battle, Rewards step: if you win and removed at least 2 opposing Units with your Damage, gain 1 extra Battle FP.'), ['kill2_win_fp' => 1], 'partial'),
+            'onyx_amout' => $t(clienttranslate('Amout, the Soul Devourer'), 'onyx', 4, 12, clienttranslate('Creature. Tied Troop: Move action +1 Land move; Battle +2 Strength. Battle, Rewards step: if you win and removed at least 2 opposing Units with your Damage, gain 1 extra Battle FP.'), ['kill2_win_fp' => 1], $creature(1, 2)),
             'onyx_bestial_fury' => $t(clienttranslate('Bestial Fury'), 'onyx', 4, 13, clienttranslate('Move action: your Troops gain +1 Land move. Battle: your Troops gain +1 Strength and +1 Damage.'), ['move' => 1, 'strength' => 1, 'damage' => 1]),
             'onyx_divine_might' => $t(clienttranslate('Divine Might'), 'onyx', 4, 14, clienttranslate('Day and Night: each time another effect makes you gain at least 1 PP, gain +2 PP.'), ['pp_gain_bonus' => 2]),
-            'onyx_act_of_god' => $t(clienttranslate('Act of God'), 'onyx', 4, 15, $actOfGod, [], 'none') + ['aog' => true],
+            'onyx_act_of_god' => $t(clienttranslate('Act of God'), 'onyx', 4, 15, $actOfGod, ['silver' => 1], ['aog' => true]),
             // Sapphire
             'sapphire_recruiting_scribe' => $t(clienttranslate('Recruiting Scribe'), 'sapphire', 1, 16, clienttranslate('Recruit action: add up to 3 Units for free.'), ['recruit_free' => 3]),
-            'sapphire_recruiting_scribe_2' => $t(clienttranslate('Recruiting Scribe'), 'sapphire', 1, 17, clienttranslate('Recruit action: add up to 3 Units for free.'), ['recruit_free' => 3], 'full', 2),
+            'sapphire_recruiting_scribe_2' => $t(clienttranslate('Recruiting Scribe'), 'sapphire', 1, 17, clienttranslate('Recruit action: add up to 3 Units for free.'), ['recruit_free' => 3], [], 2),
             'sapphire_defense' => $t(clienttranslate('Defense!'), 'sapphire', 1, 18, clienttranslate('Battle, Defense: your Troops gain +1 Strength.'), ['defend_strength' => 1]),
-            'sapphire_defense_2' => $t(clienttranslate('Defense!'), 'sapphire', 1, 19, clienttranslate('Battle, Defense: your Troops gain +1 Strength.'), ['defend_strength' => 1], 'full', 2),
-            'sapphire_reinforcement_prayer' => $t(clienttranslate('Reinforcement Prayer'), 'sapphire', 2, 20, clienttranslate('Pray action: you may add up to 2 Units in total for free in your Districts. Battles may then trigger as for Recruit.'), [], 'none'),
-            'sapphire_ancestral_elephant' => $t(clienttranslate('Ancestral Elephant'), 'sapphire', 2, 21, clienttranslate('Creature. Tied Troop: Move action +1 Land move; Battle +1 Strength and +1 Shield.'), [], 'none'),
-            'sapphire_shetyw_barrier' => $t(clienttranslate('Shetyw Barrier'), 'sapphire', 2, 22, clienttranslate('When acquired: take back your Battle cards, remove 1 from the game in secret and replace it with the Special Battle card "Shetyw Barrier".'), [], 'none'),
+            'sapphire_defense_2' => $t(clienttranslate('Defense!'), 'sapphire', 1, 19, clienttranslate('Battle, Defense: your Troops gain +1 Strength.'), ['defend_strength' => 1], [], 2),
+            'sapphire_reinforcement_prayer' => $t(clienttranslate('Reinforcement Prayer'), 'sapphire', 2, 20, clienttranslate('Pray action: you may add up to 2 Units in total for free in your Districts. Battles may then trigger as for Recruit.'), ['pray_units' => 2]),
+            'sapphire_ancestral_elephant' => $t(clienttranslate('Ancestral Elephant'), 'sapphire', 2, 21, clienttranslate('Creature. Tied Troop: Move action +1 Land move; Battle +1 Strength and +1 Shield.'), [], $creature(1, 1, 0, 1)),
+            'sapphire_shetyw_barrier' => $t(clienttranslate('Shetyw Barrier'), 'sapphire', 2, 22, clienttranslate('When acquired: take back your Battle cards, remove 1 from the game in secret and replace it with the Special Battle card "Shetyw Barrier".'), [], ['card' => 10]),
             'sapphire_shield_of_neith' => $t(clienttranslate('Shield of Neith'), 'sapphire', 2, 23, clienttranslate('Battle: your Troops gain +1 Shield.'), ['shield' => 1]),
             'sapphire_legion' => $t(clienttranslate('Legion'), 'sapphire', 3, 24, clienttranslate('Your Troop Limit becomes 7 Units instead of 5.'), ['troop_limit' => 7]),
             'sapphire_defensive_victory' => $t(clienttranslate('Defensive Victory'), 'sapphire', 3, 25, clienttranslate('Battle, Defense, Rewards step: if you win and still have a Troop in the Battle zone, gain 1 Battle FP.'), ['defend_win_fp' => 1]),
-            'sapphire_spy' => $t(clienttranslate('Spy'), 'sapphire', 3, 26, clienttranslate('Battle, War Council step: your opponent shows you the Battle card they play (not the DI cards) before you choose your cards.'), [], 'none'),
+            'sapphire_spy' => $t(clienttranslate('Spy'), 'sapphire', 3, 26, clienttranslate('Battle, War Council step: your opponent shows you the Battle card they play (not the DI cards) before you choose your cards.'), ['spy' => 1]),
             'sapphire_domination' => $t(clienttranslate('Domination'), 'sapphire', 3, 27, $domination, ['divine_fp' => 1]),
             'sapphire_reinforcement' => $t(clienttranslate('Reinforcement'), 'sapphire', 4, 28, clienttranslate('Recruit action: add as many Units as you wish for free.'), ['recruit_free' => 99]),
-            'sapphire_sphinx' => $t(clienttranslate('Sphinx'), 'sapphire', 4, 29, clienttranslate('When acquired: gain 1 Divine FP. Creature. Tied Troop: Move action +1 Land move; Battle +2 Strength.'), ['divine_fp' => 1], 'partial'),
-            'sapphire_divine_will' => $t(clienttranslate('Divine Will'), 'sapphire', 4, 30, clienttranslate('Golden Action: take 1 Move action or 1 Recruit action.'), [], 'none'),
-            'sapphire_act_of_god' => $t(clienttranslate('Act of God'), 'sapphire', 4, 31, $actOfGod, [], 'none') + ['aog' => true],
+            'sapphire_sphinx' => $t(clienttranslate('Sphinx'), 'sapphire', 4, 29, clienttranslate('When acquired: gain 1 Divine FP. Creature. Tied Troop: Move action +1 Land move; Battle +2 Strength.'), ['divine_fp' => 1], $creature(1, 2)),
+            'sapphire_divine_will' => $t(clienttranslate('Divine Will'), 'sapphire', 4, 30, clienttranslate('Golden Action: take 1 Move action or 1 Recruit action.'), [], ['golden' => 'move_recruit']),
+            'sapphire_act_of_god' => $t(clienttranslate('Act of God'), 'sapphire', 4, 31, $actOfGod, ['silver' => 1], ['aog' => true]),
             // Ruby
             'ruby_charge' => $t(clienttranslate('Charge!'), 'ruby', 1, 32, clienttranslate('Battle, Attack: your Troops gain +1 Strength.'), ['attack_strength' => 1]),
-            'ruby_charge_2' => $t(clienttranslate('Charge!'), 'ruby', 1, 33, clienttranslate('Battle, Attack: your Troops gain +1 Strength.'), ['attack_strength' => 1], 'full', 2),
+            'ruby_charge_2' => $t(clienttranslate('Charge!'), 'ruby', 1, 33, clienttranslate('Battle, Attack: your Troops gain +1 Strength.'), ['attack_strength' => 1], [], 2),
             'ruby_priest_of_mafdet' => $t(clienttranslate('Priest of Mafdet'), 'ruby', 1, 34, clienttranslate('Move action: your Troops gain +1 Land move.'), ['move' => 1]),
-            'ruby_priest_of_mafdet_2' => $t(clienttranslate('Priest of Mafdet'), 'ruby', 1, 35, clienttranslate('Move action: your Troops gain +1 Land move.'), ['move' => 1], 'full', 2),
+            'ruby_priest_of_mafdet_2' => $t(clienttranslate('Priest of Mafdet'), 'ruby', 1, 35, clienttranslate('Move action: your Troops gain +1 Land move.'), ['move' => 1], [], 2),
             'ruby_carnage' => $t(clienttranslate('Carnage'), 'ruby', 2, 36, clienttranslate('Battle: your Troops gain +1 Damage.'), ['damage' => 1]),
-            'ruby_wrryt_storm' => $t(clienttranslate('Wrryt Storm'), 'ruby', 2, 37, clienttranslate('When acquired: take back your Battle cards, remove 1 from the game in secret and replace it with the Special Battle card "Wrryt Storm".'), [], 'none'),
-            'ruby_phoenix' => $t(clienttranslate('Phoenix'), 'ruby', 2, 38, clienttranslate('Creature. Tied Troop: Move action +1 Land move, and it may enter 1 opposing District without starting adjacent to it; Battle +1 Strength.'), [], 'none'),
+            'ruby_wrryt_storm' => $t(clienttranslate('Wrryt Storm'), 'ruby', 2, 37, clienttranslate('When acquired: take back your Battle cards, remove 1 from the game in secret and replace it with the Special Battle card "Wrryt Storm".'), [], ['card' => 9]),
+            'ruby_phoenix' => $t(clienttranslate('Phoenix'), 'ruby', 2, 38, clienttranslate('Creature. Tied Troop: Move action +1 Land move, and it may enter 1 opposing District without starting adjacent to it; Battle +1 Strength.'), [], $creature(1, 1, 0, 0, ['phoenix' => true])),
             'ruby_dimensional_portal' => $t(clienttranslate('Dimensional Portal'), 'ruby', 2, 39, clienttranslate('Move action: your Teleportation costs 1 PP less (minimum 0) and may start from an Obelisk zone.'), ['teleport_discount' => 1, 'teleport_obelisk' => 1]),
-            'ruby_royal_scarab' => $t(clienttranslate('Royal Scarab'), 'ruby', 3, 40, clienttranslate('Creature. Tied Troop: Move action +2 Land move; Battle +2 Strength.'), [], 'none'),
+            'ruby_royal_scarab' => $t(clienttranslate('Royal Scarab'), 'ruby', 3, 40, clienttranslate('Creature. Tied Troop: Move action +2 Land move; Battle +2 Strength.'), [], $creature(2, 2)),
             'ruby_blade_of_neith' => $t(clienttranslate('Blade of Neith'), 'ruby', 3, 41, clienttranslate('Battle: your Troops gain +1 Strength.'), ['strength' => 1]),
-            'ruby_divine_wound' => $t(clienttranslate('Divine Wound'), 'ruby', 3, 42, clienttranslate('Battle, end of Confrontation step: you may discard DI cards from your hand; your Troop gains +1 Strength per card discarded.'), [], 'none'),
+            'ruby_divine_wound' => $t(clienttranslate('Divine Wound'), 'ruby', 3, 42, clienttranslate('Battle, end of Confrontation step: you may discard DI cards from your hand; your Troop gains +1 Strength per card discarded.'), ['divine_wound' => 1]),
             'ruby_domination' => $t(clienttranslate('Domination'), 'ruby', 3, 43, $domination, ['divine_fp' => 1]),
-            'ruby_giant_scorpion' => $t(clienttranslate('Giant Scorpion'), 'ruby', 4, 44, clienttranslate('Creature. Tied Troop: Move action +1 Land move; Battle +2 Strength and +2 Damage.'), [], 'none'),
+            'ruby_giant_scorpion' => $t(clienttranslate('Giant Scorpion'), 'ruby', 4, 44, clienttranslate('Creature. Tied Troop: Move action +1 Land move; Battle +2 Strength and +2 Damage.'), [], $creature(1, 2, 2)),
             'ruby_initiative' => $t(clienttranslate('Initiative'), 'ruby', 4, 45, clienttranslate('Battle, Attack: your Troops gain +1 Strength, +1 Damage and +1 Unblockable Damage. Battle, Defense: your Troops gain +1 Damage and +1 Unblockable Damage.'), ['attack_strength' => 1, 'damage' => 1, 'pierce' => 1]),
-            'ruby_surprise_attack' => $t(clienttranslate('Surprise Attack'), 'ruby', 4, 46, clienttranslate('Golden Action: take 1 Move action during which your Troop may enter 1 opposing District without starting adjacent to it.'), [], 'none'),
-            'ruby_act_of_god' => $t(clienttranslate('Act of God'), 'ruby', 4, 47, $actOfGod, [], 'none') + ['aog' => true],
+            'ruby_surprise_attack' => $t(clienttranslate('Surprise Attack'), 'ruby', 4, 46, clienttranslate('Golden Action: take 1 Move action during which your Troop may enter 1 opposing District without starting adjacent to it.'), [], ['golden' => 'move_surprise']),
+            'ruby_act_of_god' => $t(clienttranslate('Act of God'), 'ruby', 4, 47, $actOfGod, ['silver' => 1], ['aog' => true]),
             // Diamond
             'diamond_priest' => $t(clienttranslate('Priest'), 'diamond', 1, 48, clienttranslate('Pray action: gain +1 PP.'), ['pray' => 1]),
-            'diamond_priest_2' => $t(clienttranslate('Priest'), 'diamond', 1, 49, clienttranslate('Pray action: gain +1 PP.'), ['pray' => 1], 'full', 2),
+            'diamond_priest_2' => $t(clienttranslate('Priest'), 'diamond', 1, 49, clienttranslate('Pray action: gain +1 PP.'), ['pray' => 1], [], 2),
             'diamond_priestess' => $t(clienttranslate('Priestess'), 'diamond', 1, 50, clienttranslate('Acquire action: every Power tile costs 1 PP less (minimum 0).'), ['buy_discount' => 1]),
-            'diamond_priestess_2' => $t(clienttranslate('Priestess'), 'diamond', 1, 51, clienttranslate('Acquire action: every Power tile costs 1 PP less (minimum 0).'), ['buy_discount' => 1], 'full', 2),
+            'diamond_priestess_2' => $t(clienttranslate('Priestess'), 'diamond', 1, 51, clienttranslate('Acquire action: every Power tile costs 1 PP less (minimum 0).'), ['buy_discount' => 1], [], 2),
             'diamond_magical_support' => $t(clienttranslate('Magical Support'), 'diamond', 2, 52, clienttranslate('Build action: each Level costs 1 PP less (minimum 0), even when you add several Levels at once.'), ['raise_discount' => 1]),
-            'diamond_deep_desert_snake' => $t(clienttranslate('Deep Desert Snake'), 'diamond', 2, 53, clienttranslate('Creature. Tied Troop: Move action +1 Land move; in Battle it ignores the effects and bonuses of the Creature tied to the opposing Troop.'), [], 'none'),
-            'diamond_vision' => $t(clienttranslate('Vision'), 'diamond', 2, 54, clienttranslate('Night, Divine Intervention step: draw 4 additional DI cards, then discard 4 DI cards.'), [], 'none'),
+            'diamond_deep_desert_snake' => $t(clienttranslate('Deep Desert Snake'), 'diamond', 2, 53, clienttranslate('Creature. Tied Troop: Move action +1 Land move; in Battle it ignores the effects and bonuses of the Creature tied to the opposing Troop.'), [], $creature(1, 0, 0, 0, ['snake' => true])),
+            'diamond_vision' => $t(clienttranslate('Vision'), 'diamond', 2, 54, clienttranslate('Night, Divine Intervention step: draw 4 additional DI cards, then discard 4 DI cards.'), ['vision' => 4]),
             'diamond_divine_boon' => $t(clienttranslate('Divine Boon'), 'diamond', 2, 55, clienttranslate('Night, Divine Intervention step: draw 1 additional DI card.'), ['night_di' => 1]),
-            'diamond_hand_of_god' => $t(clienttranslate('Hand of God'), 'diamond', 3, 56, clienttranslate('Night, Awakening step: you may take 1 Build action to add 1 Level for free to 1 of your Pyramids.'), [], 'none'),
+            'diamond_hand_of_god' => $t(clienttranslate('Hand of God'), 'diamond', 3, 56, clienttranslate('Night, Awakening step: you may take 1 Build action to add 1 Level for free to 1 of your Pyramids.'), ['hand_of_god' => 1]),
             'diamond_divine_hunger' => $t(clienttranslate('Divine Hunger'), 'diamond', 3, 57, clienttranslate('Battle, end of Casualties step: gain 2 PP per opposing Unit removed by your Damage.'), ['pp_per_kill' => 2]),
             'diamond_priest_of_thoeris' => $t(clienttranslate('Priest of Thoeris'), 'diamond', 3, 58, clienttranslate('Battle, Attack, start of War Council step: draw 1 DI card.'), ['attack_draw' => 1]),
             'diamond_domination' => $t(clienttranslate('Domination'), 'diamond', 3, 59, $domination, ['divine_fp' => 1]),
             'diamond_priest_of_ra' => $t(clienttranslate('Priest of Ra'), 'diamond', 4, 60, clienttranslate('Each time you spend at least 1 PP for an effect, that cost is reduced by 1 PP (minimum 0).'), ['spend_discount' => 1]),
             'diamond_priest_of_amon' => $t(clienttranslate('Priest of Amon'), 'diamond', 4, 61, clienttranslate('Night, Prayers step: gain +7 PP.'), ['night_pp' => 7]),
-            'diamond_the_mummy' => $t(clienttranslate('The Mummy'), 'diamond', 4, 62, clienttranslate('Creature. Tied Troop: Move action +1 Land move; Battle +2 Strength. Night, Divine Intervention step: draw 1 additional DI card.'), ['night_di' => 1], 'partial'),
-            'diamond_act_of_god' => $t(clienttranslate('Act of God'), 'diamond', 4, 63, $actOfGod, [], 'none') + ['aog' => true],
+            'diamond_the_mummy' => $t(clienttranslate('The Mummy'), 'diamond', 4, 62, clienttranslate('Creature. Tied Troop: Move action +1 Land move; Battle +2 Strength. Night, Divine Intervention step: draw 1 additional DI card.'), ['night_di' => 1], $creature(1, 2)),
+            'diamond_act_of_god' => $t(clienttranslate('Act of God'), 'diamond', 4, 63, $actOfGod, ['silver' => 1], ['aog' => true]),
         ];
+        // Duplicate level-1 tiles share one market stack: the second copy points at the first.
+        foreach ($tiles as $key => &$tile) {
+            $tile['stack'] = $key === 'onyx_spear_mercenaries' ? 'onyx_sword_mercenaries' : preg_replace('/_2$/', '', $key);
+        }
+        unset($tile);
         return $tiles;
     }
 

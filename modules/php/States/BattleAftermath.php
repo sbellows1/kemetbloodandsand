@@ -55,7 +55,7 @@ class BattleAftermath extends GameState
     private function advance(array $state, bool $done): string
     {
         $this->game->notifyState($state);
-        if ($done) return NextPlayer::class;
+        if ($done) return $this->game->afterAction($state);
         $this->game->gamestate->changeActivePlayer((int) $this->game->aftermathActor($state));
         return BattleAftermath::class;
     }

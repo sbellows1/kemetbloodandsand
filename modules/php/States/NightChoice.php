@@ -59,6 +59,11 @@ class NightChoice extends GameState
         $state['night']['index']++;
         if ($state['night']['index'] >= count($state['order'])) {
             $this->game->resolveNight($state);
+            if ($state['nightPowers']) {
+                $this->game->notifyState($state);
+                return NightPowers::class;
+            }
+            $this->game->startDestiny($state);
             $this->game->notifyState($state);
             return Destiny::class;
         }
