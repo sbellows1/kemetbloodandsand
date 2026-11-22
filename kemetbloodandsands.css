@@ -25,7 +25,8 @@
 .kemet-component { position:relative; display:grid; place-items:center; width:38px; height:38px; padding:0; border:2px solid #f4e3b0; border-radius:4px; background:#f5e5bf; color:#2b2118; cursor:default; }
 .kemet-component.selectable { cursor:pointer; box-shadow:0 0 0 2px var(--select); }
 .kemet-component.unavailable { opacity:.4; }
-.kemet-component.pyramid { clip-path:polygon(50% 0,100% 100%,0 100%); background:var(--c); color:#fff; padding-top:10px; }
+.kemet-component.pyramid { background:transparent; color:#fff; padding-top:10px; }
+.kemet-component.pyramid::before { content:""; position:absolute; inset:0; background:var(--c); clip-path:polygon(50% 0,100% 100%,0 100%); }
 .kemet-component.pyramid.ruby { --c:var(--ruby); } .kemet-component.pyramid.sapphire { --c:var(--sapphire); }
 .kemet-component.pyramid.diamond { --c:var(--diamond); color:#2b2100; } .kemet-component.pyramid.onyx { --c:var(--onyx); }
 .kemet-component.pyramid b { position:absolute; top:12px; font-size:14px; }
